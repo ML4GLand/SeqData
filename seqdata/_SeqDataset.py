@@ -1,7 +1,7 @@
 import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
-from ._utils import ascii_encode_seq 
+from _utils import ascii_encode_seq 
 
 
 class SeqDataset(Dataset):
