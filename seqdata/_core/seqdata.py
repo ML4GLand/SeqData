@@ -9,8 +9,8 @@ from collections import OrderedDict
 from functools import singledispatch
 from pandas.api.types import is_string_dtype
 from copy import deepcopy
-from ._SeqDataset import SeqDataset
 Index1D = Union[slice, int, str, np.int64, np.ndarray]
+from .utils import _gen_dataframe, convert_to_dict
 
 
 class SeqData:
@@ -22,50 +22,48 @@ class SeqData:
         Numpy array of sequences.
     names : np.ndarray
         Numpy array of names.
-    rev_seqs : np.ndarray
-        Numpy array of reverse complement sequences.
     seqs_annot : pr.PyRanges
         PyRanges object or dict of sequences annotations.
     pos_annot : pr.PyRanges
         PyRanges object or dict of positions annotations.
-    ohe_seqs : np.ndarray
-        Numpy array of one-hot encoded sequences.
-    ohe_rev_seqs : np.ndarray
-        Numpy array of one-hot encoded reverse complement sequences.
     seqsm : np.ndarray
         Numpy array of sequences or dict of sequences.
     uns : dict
         Dict of additional/unstructured information.
+    rev_seqs : np.ndarray
+        Numpy array of reverse complement sequences.
     seqsidx : Index1D
         Index of sequences to use.
+    ohe_seqs : np.ndarray
+        Numpy array of one-hot encoded sequences.
+    ohe_rev_seqs : np.ndarray
+        Numpy array of one-hot encoded reverse complement sequences.
     """
 
     def __init__(
         self,
         seqs: np.ndarray = None,
         names: np.ndarray = None,
-        rev_seqs: np.ndarray = None,
         seqs_annot: Optional[Union[pd.DataFrame, Mapping[str, Iterable[Any]]]] = None,
         pos_annot: Union[pr.PyRanges, Dict, str] = None,
-        ohe_seqs: np.ndarray = None,
-        ohe_rev_seqs: np.ndarray = None,
         seqsm: Optional[Union[np.ndarray, Mapping[str, Sequence[Any]]]] = None,
         uns: Optional[Mapping[str, Any]] = None,
+        rev_seqs: np.ndarray = None,
+        ohe_seqs: np.ndarray = None,
+        ohe_rev_seqs: np.ndarray = None,
         seqidx: Index1D = None,
-    ):
-
-        if seqs is not None:
-            self.seqidx = (
-                range(seqs.shape[0]) 
-                if seqidx is None or len(seqidx) == 0 
-                else seqidx
-            )
+    ):  
+        # Set up the sequence index
+        if seqidx is not None and len(seqidx) > 0:
+            self.seqidx = seqidx
+        elif seqs is not None:
+            self.seqidx = range(seqs.shape[0])
+        elif ohe_seqs is not None:
+            self.seqidx = range(ohe_seqs.shape[0])
+        elif seqs_annot is not None:
+            self.seqidx = range(seqs_annot.shape[0])
         else:
-            self.seqidx = (
-                range(ohe_seqs.shape[0])
-                if seqidx is None or len(seqidx) == 0
-                else seqidx
-            )
+            raise ValueError("No sequences or sequence metadata provided.")
 
         # Sequence representations
         self.seqs = np.array(seqs[self.seqidx]) if seqs is not None else None
@@ -75,7 +73,7 @@ class SeqData:
         self.ohe_rev_seqs = np.array(ohe_rev_seqs[self.seqidx]) if ohe_rev_seqs is not None else None
 
         # n_obs
-        self._n_obs = len(self.seqs) if self.seqs is not None else len(self.ohe_seqs)
+        self._n_obs = len(self.seqidx)
 
         # seq_annot (handled by gen dataframe)
         if isinstance(self.seqidx, slice):
@@ -109,7 +107,6 @@ class SeqData:
                 seqsm[key] = seqsm[key][self.seqidx]
         self.seqsm = convert_to_dict(seqsm)
             
-
     @property
     def seqs(self) -> np.ndarray:
         """np.ndarray: Numpy array of string representation of sequences."""
@@ -292,144 +289,10 @@ class SeqData:
 
         write_h5sd(self, path, mode)
 
-    def to_dataset(
-        self,
-        target_keys: Union[str, List[str]] = None,
-        seq_transforms: List[str] = None,
-        transform_kwargs: dict = {},
-    ) -> SeqDataset:
-        """Convert SeqData object to SeqDataset PyTorch dataset.
-
-        Parameters
-        ----------
-        target: str or list of str, optional
-            Target to use for training. If None, -1 will be used for all sequences.
-        seq_transforms: list of str, optional
-            List of sequence transforms to apply.
-        transform_kwargs: dict, optional
-            Keyword arguments to pass to sequence transforms.
-
-        Returns
-        -------
-        SeqDataset
-            PyTorch dataset class for SeqData object.
-        """
-        from .._transforms import ReverseComplement, OneHotEncode, ToTensor
-        from torchvision import transforms as torch_transforms
-
-        transforms = []
-        if target_keys is None:
-            targs = None
-        else:
-            targs = self.seqs_annot[target_keys].values
-
-        if seq_transforms is None:
-            print("No transforms given, assuming just need to tensorize.")
-            transforms = [ToTensor(**transform_kwargs)]
-            return SeqDataset(
-                self.ohe_seqs,
-                names=self.names,
-                targets=targs if target_keys is not None else None,
-                rev_seqs=self.ohe_rev_seqs,
-                transform=torch_transforms.Compose(transforms),
-            )
-
-        if "reverse_complement" in seq_transforms:
-            if self.seqs is not None:
-                transforms.append(ReverseComplement(**transform_kwargs))
-            else:
-                Raise(ValueError("Cannot reverse complement sequences if seqs is None"))
-
-        ohe_flag = True
-        if "one_hot_encode" in seq_transforms:
-            if self.seqs is not None:
-                transforms.append(OneHotEncode(**transform_kwargs))
-            else:
-                Raise(ValueError("Cannot one hot encode sequences if seqs is None"))
-            ohe_flag = False
-
-        transforms.append(ToTensor(**transform_kwargs))
-
-        if ohe_flag:
-            return SeqDataset(
-                self.ohe_seqs,
-                names=self.names,
-                targets=targs if target_keys is not None else None,
-                rev_seqs=self.ohe_rev_seqs,
-                transform=torch_transforms.Compose(transforms),
-            )
-        else:
-            return SeqDataset(
-                self.seqs,
-                names=self.names,
-                targets=targs if target_keys is not None else None,
-                rev_seqs=self.rev_seqs,
-                transform=torch_transforms.Compose(transforms),
-            )
-
     def make_names_unique(self):
         """Make sequence names unique by appending a number to the end of each name."""
         n_digits = len(str(self.n_obs))
-        new_index = np.array(
-            [
-                "seq{num:0{width}}".format(num=i, width=n_digits)
-                for i in range(self.n_obs)
-            ]
-        )
+        new_index = np.array(["seq{num:0{width}}".format(num=i, width=n_digits)for i in range(self.n_obs)])
         self.names = new_index
+        self.seqs_annot["index"] = self.seqs_annot.index
         self.seqs_annot.index = new_index
-
-
-# TODO: move this to utils or something
-@singledispatch
-def _gen_dataframe(anno, length, index_names):
-    if anno is None or len(anno) == 0:
-        return pd.DataFrame(index=pd.RangeIndex(0, length, name=None).astype(str))
-    for index_name in index_names:
-        if index_name in anno:
-            return pd.DataFrame(
-                anno,
-                index=anno[index_name],
-                columns=[k for k in anno.keys() if k != index_name],
-            )
-    return pd.DataFrame(anno, index=pd.RangeIndex(0, length, name=None).astype(str))
-
-
-@_gen_dataframe.register(pd.DataFrame)
-def _(anno, length, index_names):
-    anno = anno.copy(deep=False)
-    if not is_string_dtype(anno.index):
-        # warnings.warn("Transforming to str index.", ImplicitModificationWarning)
-        anno.index = anno.index.astype(str)
-    return anno
-
-
-@_gen_dataframe.register(pd.Series)
-@_gen_dataframe.register(pd.Index)
-def _(anno, length, index_names):
-    raise ValueError(f"Cannot convert {type(anno)} to DataFrame")
-
-
-@singledispatch
-def convert_to_dict(obj) -> dict:
-    return dict(obj)
-
-
-@convert_to_dict.register(dict)
-def convert_to_dict_dict(obj: dict):
-    return obj
-
-
-@convert_to_dict.register(np.ndarray)
-def convert_to_dict_ndarray(obj: np.ndarray):
-    if obj.dtype.fields is None:
-        raise TypeError(
-            "Can only convert np.ndarray with compound dtypes to dict, "
-            f"passed array had “{obj.dtype}”."
-        )
-    return {k: obj[k] for k in obj.dtype.fields.keys()}
-
-
-@convert_to_dict.register(type(None))
-def convert_to_dict_nonetype(obj: None):
-    return dict()
