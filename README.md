@@ -60,3 +60,25 @@ sd.read_h5sd()
 ### Overlap with known genomic features
   - Known genomic features
   - Overlap with different epigenomics data
+
+# Tutorials
+
+## Motif enrichment analysis with HOMER/DEM/cisTarget
+
+##
+
+# Requirements
+
+```bash
+python
+numpy
+pandas
+matplotlib
+seaborn
+pyranges
+logomaker
+pybedtools
+```
+
+# References
+1. 
