@@ -63,9 +63,11 @@ sd.read_h5sd()
 
 # Tutorials
 
-## Motif enrichment analysis with HOMER/DEM/cisTarget
+## Preparing sequences for sequence-to-function models
 
-##
+## Preparing features for MPRA activity prediction
+
+## Motif enrichment analysis with HOMER/DEM/cisTarget (coming soon)
 
 # Requirements
 
