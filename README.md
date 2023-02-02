@@ -11,7 +11,7 @@ import seqdata as sd
 
 # Core functionality
 
-## I/0
+## Sequence I/O
 SeqData is designed to handle two major types of data
 
 1. Actual string sequences with annotations
