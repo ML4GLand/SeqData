@@ -58,5 +58,5 @@ sd.read_h5sd()
 ## Sequence annotations
 
 ### Overlap with known genomic features
-    - Known genomic features
-    - Overlap with different epigenomics data
+  - Known genomic features
+  - Overlap with different epigenomics data
