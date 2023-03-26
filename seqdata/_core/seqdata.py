@@ -73,7 +73,10 @@ class SeqData:
         self.ohe_rev_seqs = np.array(ohe_rev_seqs[self.seqidx]) if ohe_rev_seqs is not None else None
 
         # n_obs
-        self._n_obs = len(self.seqidx)
+        if type(self.seqidx[0]) in [bool, np.bool_]:
+            self._n_obs = sum(self.seqidx)
+        else:
+            self._n_obs = len(self.seqidx)
 
         # seq_annot (handled by gen dataframe)
         if isinstance(self.seqidx, slice):
@@ -285,7 +288,7 @@ class SeqData:
         mode: str, optional
             Mode to open h5sd file. Default is "w".
         """
-        from .._io import write_h5sd
+        from .._io.write import write_h5sd
 
         write_h5sd(self, path, mode)
 

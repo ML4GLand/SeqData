@@ -73,7 +73,7 @@ def write_bed(
     else:
         raise ValueError("SeqData object does not contain sequence annotations.")
     if all([col in sdata.seqs_annot.columns for col in bed_cols]):
-        sdata.seqs_annot[bed_cols + non_bed_cols].to_csv(filename, sep="\t", index=False. header=False)
+        sdata.seqs_annot[bed_cols + non_bed_cols].to_csv(filename, sep="\t", index=False, header=False)
     else:
         raise ValueError("SeqData object does not contain chr, start, and end columns specified.")
 
