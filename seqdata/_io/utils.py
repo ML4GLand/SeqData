@@ -1,13 +1,13 @@
-from os import PathLike
 from pathlib import Path
-from typing import Union, List
-import numpy as np
+from typing import Optional, Union, List
 import pandas as pd
+
+PathType = Union[str, Path]
 
 
 def _read_and_concat_dataframes(
-    file_names: Union[PathLike, List[PathLike]],
-    col_names: Union[str, list] = None,
+    file_names: Union[PathType, List[PathType]],
+    col_names: Optional[Union[str, List[str]]] = None,
     sep: str = "\t",
     low_memory: bool = False,
     compression: str = "infer",
@@ -34,18 +34,21 @@ def _read_and_concat_dataframes(
     -------
     pd.DataFrame
     """
-    file_names = [file_names] if isinstance(file_names, str) else file_names
-    dataframe = pd.DataFrame()
+    if not isinstance(file_names, list):
+        file_names = [file_names]
+    if not isinstance(col_names, list) and col_names is not None:
+        col_names = [col_names]
+    dfs = []
     for file_name in file_names:
         x = pd.read_csv(
             file_name,
             sep=sep,
             low_memory=low_memory,
             names=col_names,
-            compression=compression,
+            compression=compression,  # type: ignore
             header=0,
             **kwargs
         )
-        dataframe = pd.concat([dataframe, x], ignore_index=True)
-    dataframe.reset_index(inplace=True, drop=True)
+        dfs.append(x)
+    dataframe = pd.concat(dfs, ignore_index=True)
     return dataframe

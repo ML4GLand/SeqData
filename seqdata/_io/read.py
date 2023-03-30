@@ -1,20 +1,23 @@
 import h5py
 import numpy as np
 import pandas as pd
-from typing import List, Union, Optional, Iterable
-from os import PathLike
+from typing import List, Union, Optional
+from pathlib import Path
 import pyranges as pr
 from .. import SeqData
 from .utils import _read_and_concat_dataframes
 
 
-def read_csv(
-    filename: Union[PathLike, List[PathLike]],
+PathType = Union[str, Path]
+
+
+def read_csvs(
+    filename: Union[PathType, List[PathType]],
     seq_col: Optional[str] = None,
     name_col: Optional[str] = None,
     sep: str = "\t",
     low_memory: bool = False,
-    col_names: Iterable = None,
+    col_names: Optional[Union[str, List[str]]] = None,
     compression: str = "infer",
     **kwargs,
 ):
@@ -22,7 +25,7 @@ def read_csv(
 
     Parameters
     ----------
-    file : PathLike
+    file : str, Path
         File path(s) to read the data from. If a list is provided, the files will be concatenated (must have the same columns).
     seq_col : str, optional
         Column name containing sequences. Defaults to None.
@@ -64,22 +67,22 @@ def read_csv(
         **kwargs,
     )
     if seq_col is not None and seq_col in dataframe.columns:
-        seqs = dataframe[seq_col].to_numpy(dtype=str)
+        seqs = dataframe[seq_col].to_numpy(dtype='U').reshape(-1, 1).view('U1')
         dataframe.drop(seq_col, axis=1, inplace=True)
     else:
         seqs = None
-    if name_col is not None and name_col in dataframe.columns:
-        names = dataframe[name_col].to_numpy(dtype=str)
-        dataframe.set_index(name_col, inplace=True)
-    else:
+        
+    
+    ds = dataframe.rename_axis('sequence').to_xarray()
+    del ds.coords['sequence']
+    if seqs is not None:
+        ds['seqs'] = (('sequence', 'length'), seqs)
+    if name_col is None:
         n_digits = len(str(len(dataframe) - 1))
-        dataframe.index = np.array(["seq{num:0{width}}".format(num=i, width=n_digits) for i in range(len(dataframe))])
-        names = dataframe.index.to_numpy()
-    return SeqData(
-        names=names,
-        seqs=seqs,
-        seqs_annot=dataframe
-    )
+        names = np.array([f"seq{i:0{n_digits}}" for i in range(len(dataframe))])
+        ds['names'] = ('sequence', names)
+    
+    return SeqData(ds)
 
 def read_fasta(
     seq_file, 
@@ -133,14 +136,14 @@ def read_bed(
     pass
 
 def read_h5sd(
-    filename: PathLike,
+    filename: PathType,
 ):
     """
     Read sequences into SeqData objects from h5sd files.
 
     Parameters
     ----------
-    filename : PathLike
+    filename : str, Path
         File path to read the data from.
 
     Returns
@@ -243,7 +246,7 @@ def read(
     """
     seq_file_extension = seq_file.split(".")[-1]
     if seq_file_extension in ["csv", "tsv"]:
-        return read_csv(seq_file, *args, **kwargs)
+        return read_csvs(seq_file, *args, **kwargs)
     elif seq_file_extension in ["fasta", "fa"]:
         return read_fasta(seq_file, *args, **kwargs)
     elif seq_file_extension in ["bed"]:
