@@ -1,11 +1,13 @@
+from os import PathLike
+from typing import Optional
+
 import h5py
 import numpy as np
 import pandas as pd
-from typing import Optional
-from os import PathLike
+
 
 def write_csv(
-    sdata, 
+    sdata,
     filename,
     sep: str = "\t",
     compression: str = "infer",
@@ -33,10 +35,8 @@ def write_csv(
     else:
         raise ValueError("SeqData object does not contain sequence annotations.")
 
-def write_fasta(
-    sdata, 
-    filename
-):
+
+def write_fasta(sdata, filename):
     """Write sequences from SeqData to fasta files.
 
     Parameters
@@ -51,8 +51,9 @@ def write_fasta(
             f.write(">" + sdata.names[i] + "\n")
             f.write(sdata.seqs[i] + "\n")
 
+
 def write_bed(
-    sdata, 
+    sdata,
     filename,
     chrom_col: str = "chr",
     start_col: str = "start",
@@ -73,14 +74,16 @@ def write_bed(
     else:
         raise ValueError("SeqData object does not contain sequence annotations.")
     if all([col in sdata.seqs_annot.columns for col in bed_cols]):
-        sdata.seqs_annot[bed_cols + non_bed_cols].to_csv(filename, sep="\t", index=False, header=False)
+        sdata.seqs_annot[bed_cols + non_bed_cols].to_csv(
+            filename, sep="\t", index=False, header=False
+        )
     else:
-        raise ValueError("SeqData object does not contain chr, start, and end columns specified.")
+        raise ValueError(
+            "SeqData object does not contain chr, start, and end columns specified."
+        )
 
-def write_numpy(
-    sdata, 
-    filename
-):
+
+def write_numpy(sdata, filename):
     """Write sequences from SeqData to numpy files.
 
     Parameters
@@ -105,11 +108,8 @@ def write_numpy(
     if sdata.seqs_annot is not None:
         pd.to_csv(filename + "_seqs_annot.csv", sdata.seqs_annot)
 
-def write_h5sd(
-    sdata, 
-    filename: Optional[PathLike] = None, 
-    mode: str = "w"
-):
+
+def write_h5sd(sdata, filename: Optional[PathLike] = None, mode: str = "w"):
     """Write SeqData object to h5sd file.
 
     Parameters
@@ -126,25 +126,43 @@ def write_h5sd(
         f.attrs.setdefault("encoding-type", "SeqData")
         f.attrs.setdefault("encoding-version", "0.0.1")
         if sdata.seqs is not None:
-            f.create_dataset("seqs", data=np.array([n.encode("ascii", "ignore") for n in sdata.seqs]))
+            f.create_dataset(
+                "seqs", data=np.array([n.encode("ascii", "ignore") for n in sdata.seqs])
+            )
         if sdata.names is not None:
-            f.create_dataset("names", data=np.array([n.encode("ascii", "ignore") for n in sdata.names]))
+            f.create_dataset(
+                "names",
+                data=np.array([n.encode("ascii", "ignore") for n in sdata.names]),
+            )
         if sdata.ohe_seqs is not None:
             f.create_dataset("ohe_seqs", data=sdata.ohe_seqs)
         if sdata.rev_seqs is not None:
-            f.create_dataset("rev_seqs", data=np.array([n.encode("ascii", "ignore") for n in sdata.rev_seqs]))
+            f.create_dataset(
+                "rev_seqs",
+                data=np.array([n.encode("ascii", "ignore") for n in sdata.rev_seqs]),
+            )
         if sdata.ohe_rev_seqs is not None:
             f.create_dataset("ohe_rev_seqs", data=sdata.ohe_rev_seqs)
         if sdata.seqs_annot is not None:
             for key, item in dict(sdata.seqs_annot).items():
                 if item.dtype == "object":
-                    f["seqs_annot/" + str(key)] = np.array([n.encode("ascii", "ignore") for n in item.replace(np.nan, "NA")])
+                    f["seqs_annot/" + str(key)] = np.array(
+                        [
+                            n.encode("ascii", "ignore")
+                            for n in item.replace(np.nan, "NA")
+                        ]
+                    )
                 else:
                     f["seqs_annot/" + str(key)] = item
         if sdata.pos_annot is not None:
             for key, item in dict(sdata.pos_annot.df).items():
                 if item.dtype in ["object", "category"]:
-                    f["pos_annot/" + str(key)] = np.array([n.encode("ascii", "ignore")for n in item.replace(np.nan, "NA")])
+                    f["pos_annot/" + str(key)] = np.array(
+                        [
+                            n.encode("ascii", "ignore")
+                            for n in item.replace(np.nan, "NA")
+                        ]
+                    )
                 else:
                     f["pos_annot/" + str(key)] = item
         if sdata.seqsm is not None:
@@ -162,6 +180,7 @@ def write_h5sd(
                 except TypeError:
                     print(f"Unsupported type for {key}")
                     continue
+
 
 def write(sdata, filename, *args, **kwargs):
     """Wrapper function to write SeqData objects to various file types.

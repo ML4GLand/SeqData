@@ -1,12 +1,17 @@
-import h5py
+from pathlib import Path
+from typing import List, Optional, Union
+
+import joblib
 import numpy as np
 import pandas as pd
-from typing import List, Union, Optional
-from pathlib import Path
-import pyranges as pr
-from .. import SeqData
-from .utils import _read_and_concat_dataframes
+import pyBigWig
+import pysam
+import zarr
+from numcodecs import Delta, blosc
+from tqdm import tqdm
 
+from .. import SeqData
+from .utils import _read_and_concat_dataframes, _read_bedlike, _set_uniform_length_around_center, _df_to_xr_zarr
 
 PathType = Union[str, Path]
 
@@ -67,194 +72,215 @@ def read_csvs(
         **kwargs,
     )
     if seq_col is not None and seq_col in dataframe.columns:
-        seqs = dataframe[seq_col].to_numpy(dtype='U').reshape(-1, 1).view('U1')
+        seqs = dataframe[seq_col].to_numpy(dtype="U").reshape(-1, 1).view("U1")
         dataframe.drop(seq_col, axis=1, inplace=True)
     else:
         seqs = None
-        
-    
-    ds = dataframe.rename_axis('sequence').to_xarray()
-    del ds.coords['sequence']
+
+    ds = dataframe.rename_axis("sequence").to_xarray()
+    del ds.coords["sequence"]
     if seqs is not None:
-        ds['seqs'] = (('sequence', 'length'), seqs)
+        ds["seqs"] = (("sequence", "length"), seqs)
     if name_col is None:
         n_digits = len(str(len(dataframe) - 1))
         names = np.array([f"seq{i:0{n_digits}}" for i in range(len(dataframe))])
-        ds['names'] = ('sequence', names)
-    
+        ds["names"] = ("sequence", names)
+
     return SeqData(ds)
 
+
 def read_fasta(
-    seq_file, 
-    annot_file=None,
-    sep="\t",
+    seq_name: str,
+    id_name: str,
+    fasta_path: PathType,
+    seqdata_path: PathType,
+    batch_size: int,
 ):
-    """Read sequences into SeqData object from fasta files.
+    """Write a SeqData from a FASTA file where each contig is a sequence.
 
     Parameters
     ----------
-    seq_file : str
-        Fasta file path to read
-    annot_file : str
-        Delimited file path containing annotation file. Defaults to None.
-
-    Returns
-    -------
-    sdata : SeqData
-        Returns SeqData object containing sequences and identifiers
+    seq_name : str
+        Name of array for FASTA sequences
+    id_name : str
+        Name of array for FASTA sequence IDs
+    fasta_path : str, Path
+    seqdata_path : str, Path
+    batch_size : int
+        Make this as large as RAM allows. How many sequences to IO at a time.
     """
-    seqs = np.array([x.rstrip() for (i, x) in enumerate(open(seq_file)) if i % 2 == 1])
-    names = np.array([x.rstrip().replace(">", "") for (i, x) in enumerate(open(seq_file)) if i % 2 == 0])
-    seqs_annot = pd.read_csv(annot_file, sep=sep) if annot_file is not None else None
-    return SeqData(
-        names=names,
-        seqs=seqs,
-        seqs_annot=seqs_annot if seqs_annot is not None else None,
-    )
+    z = zarr.open_group(seqdata_path)
+    with pysam.FastaFile(str(fasta_path)) as f:
+        seq_names = f.references
 
-def read_bed(
-    bed_file: str,
-    ref_file: str = None,
-    **kwargs,
-):
-    """Modify to just load in bed region info into seqs_annot
+        arr = z.array(id_name, data=np.array(list(seq_names), object), overwrite=True)
+        arr.attrs["_ARRAY_DIMENSIONS"] = ["sequence"]
 
-    Parameters
-    ----------
-    bed_file : str
-        Path to the BED file where peaks are stored.
-    ref_file : str, optional
-        Path to the reference genome file. If provided, the sequences are extracted with pyRanges. Defaults to None.
-    **kwargs : dict
-        Additional arguments to pass to as Janggu's parameters for loading.
+        n_seqs = len(seq_names)
+        length = f.get_reference_length(seq_names[0])
+        batch_size = min(n_seqs, batch_size)
 
-    Returns
-    -------
-    sdata : SeqData
-        SeqData object containing the peaks.
-    """
-    pass
-
-def read_h5sd(
-    filename: PathType,
-):
-    """
-    Read sequences into SeqData objects from h5sd files.
-
-    Parameters
-    ----------
-    filename : str, Path
-        File path to read the data from.
-
-    Returns
-    -------
-        sdata: SeqData object.
-    """
-    with h5py.File(filename, "r") as f:
-        d = {}
-        
-        # read in seqs
-        if "seqs" in f:
-            d["seqs"] = np.array([n.decode("ascii", "ignore") for n in f["seqs"][:]])
-        
-        # read in names
-        if "names" in f:
-            d["names"] = np.array([n.decode("ascii", "ignore") for n in f["names"][:]])
-        
-        # read in ohe_seqs
-        if "ohe_seqs" in f:
-            d["ohe_seqs"] = f["ohe_seqs"][:]
-        
-        # read in seqs_annot
-        if "seqs_annot" in f:
-            out_dict = {}
-            for key in f["seqs_annot"].keys():
-                out = f["seqs_annot"][key][()]
-                if isinstance(out[0], bytes):
-                    out_dict[key] = np.array([n.decode("ascii", "ignore") for n in out])
-                else:
-                    out_dict[key] = out
-            if "names" in f:
-                idx = d["names"]
-            else:
-                n_digits = len(str(len(d["seqs"])))
-                idx = np.array(["seq{num:0{width}}".format(num=i, width=n_digits)for i in range(len(d["seqs"]))])
-            d["seqs_annot"] = pd.DataFrame(index=idx, data=out_dict).replace("NA", np.nan)
-        
-        # read in pos_annot
-        if "pos_annot" in f:
-            out_dict = {}
-            for key in f["pos_annot"].keys():
-                out = f["pos_annot"][key][()]
-                if isinstance(out[0], bytes):
-                    out_dict[key] = np.array([n.decode("ascii", "ignore") for n in out])
-                else:
-                    out_dict[key] = out
-            d["pos_annot"] = pr.from_dict(out_dict)
-        
-        # read in seqsm
-        if "seqsm" in f:
-            out_dict = {}
-            for key in f["seqsm"].keys():
-                out = f["seqsm"][key][()]
-                if isinstance(out[0], bytes):
-                    out_dict[key] = np.array([n.decode("ascii", "ignore") for n in out])
-                else:
-                    out_dict[key] = out
-            d["seqsm"] = out_dict
-        
-        # read in uns
-        if "uns" in f:
-            out_dict = {}
-            for key in f["uns"].keys():
-                if key == "pfms":
-                    pfm_dfs = {}
-                    for i, pfm in enumerate(f["uns"][key][()]):
-                        pfm_dfs[i] = pd.DataFrame(pfm, columns=["A", "C", "G", "T"])
-                    out_dict[key] = pfm_dfs
-                else:
-                    out = f["uns"][key][()]
-                    if isinstance(out[0], bytes):
-                        out_dict[key] = np.array(
-                            [n.decode("ascii", "ignore") for n in out]
-                        )
-                    else:
-                        out_dict[key] = out
-            d["uns"] = out_dict
-    return SeqData(**d)
-
-def read(
-    seq_file, *args, **kwargs):
-    """Wrapper function to read sequences based on file extension.
-
-    Parameters
-    ----------
-    seq_file : str
-        File path containing sequences.
-    *args : dict
-        Positional arguments from read_csv, read_fasta, read_numpy, etc.
-    **kwargs : dict
-        Keyword arguments from read_csv, read_fasta, read_numpy, etc.
-
-    Returns
-    -------
-    sdata : SeqData
-        SeqData object containing sequences and identifiers
-    tuple :
-        Numpy arrays of identifiers, sequences, reverse complement sequences and annots.
-        If any are not provided they are set to none.
-    """
-    seq_file_extension = seq_file.split(".")[-1]
-    if seq_file_extension in ["csv", "tsv"]:
-        return read_csvs(seq_file, *args, **kwargs)
-    elif seq_file_extension in ["fasta", "fa"]:
-        return read_fasta(seq_file, *args, **kwargs)
-    elif seq_file_extension in ["bed"]:
-        return read_bed(seq_file, *args, **kwargs)
-    elif seq_file_extension in ["h5sd", "h5"]:
-        return read_h5sd(seq_file, *args, **kwargs)
-    else:
-        raise ValueError("File extension not recognized. \
-            Please provide a file with one of the following extensions: \
-            csv, fasta, bed or h5sd"
+        seqs = z.empty(
+            seq_name,
+            shape=(n_seqs, length),
+            dtype="|S1",
+            chunks=(int(1e3), None),
+            overwrite=True,
+            compressor=blosc.Blosc("zstd", clevel=7, shuffle=-1),
         )
+        seqs.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length"]
+        batch = np.empty((batch_size, length), dtype="|S1")
+        batch_start_idx = 0
+        batch_idx = 0
+        for contig in seq_names:
+            batch[batch_idx] = np.frombuffer(f.fetch(contig).encode("ascii"), "|S1")
+            if batch_idx == batch_size - 1:
+                seqs[batch_start_idx : batch_start_idx + batch_size] = batch
+                batch_idx = 0
+                batch_start_idx += batch_size
+            else:
+                batch_idx += 1
+    if batch_idx != batch_size:
+        seqs[batch_start_idx : batch_start_idx + batch_idx] = batch[:batch_idx]
+    zarr.consolidate_metadata(seqdata_path)  # type: ignore
+
+
+def read_bigwig(
+    out_arr: zarr.Array,
+    bigwig_path: PathType,
+    bed: pd.DataFrame,
+    batch_size: int,
+    sample_idx: int
+):
+    length = bed.at[0, 'chromEnd'] - bed.at[0, 'chromStart']
+    batch = np.zeros((batch_size, length), np.uint16)
+    batch_start_idx = 0
+    batch_idx = 0
+    with pyBigWig.open(bigwig_path) as f:
+        for i, row in tqdm(bed.iterrows(), total=len(bed)):
+            contig, start, end = row[:3]
+            intervals = f.intervals(contig, start, end)
+            if intervals is not None:
+                for interval in intervals:
+                    rel_start = interval[0] - start
+                    rel_end = interval[1] - start
+                    value = interval[2]
+                    batch[batch_idx, rel_start:rel_end] = value
+            if batch_idx == batch_size - 1:
+                out_arr[batch_start_idx : batch_start_idx + batch_size, :, sample_idx] = batch
+                batch_idx = 0
+                batch_start_idx += batch_size
+            else:
+                batch_idx += 1
+    if batch_idx != batch_size:
+        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[:batch_idx]
+
+
+def read_bigwigs(
+    name: str,
+    bigwig_paths: List[PathType],
+    sample_names: List[str],
+    bed_path: PathType,
+    seqdata_path: PathType,
+    length: int,
+    batch_size: int,
+    n_jobs: int = 1,
+    threads_per_job: int = 1,
+):
+    compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+    
+    bed = _read_bedlike(bed_path)
+    _set_uniform_length_around_center(bed, length)
+    _df_to_xr_zarr(bed, seqdata_path, ["sequence"])
+
+    batch_size = min(len(bed), batch_size)
+    z = zarr.open_group(seqdata_path)
+    
+    arr = z.array('samples', data=np.array(sample_names, object), chunks=100, compressor=compressor, overwrite=True)
+    arr.attrs["_ARRAY_DIMENSIONS"] = ["sample"]
+    
+    coverage = z.zeros(
+        name,
+        shape=(len(bed), length),
+        dtype=np.uint16,
+        chunks=(batch_size, None),
+        overwrite=True,
+        compressor=compressor,
+        filters=[Delta(np.uint16)],
+    )
+    coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length"]
+    
+    sample_idxs = np.arange(len(sample_names))
+    tasks = [joblib.delayed(read_bigwig(coverage, bigwig, bed, batch_size, sample_idx) for bigwig, sample_idx in zip(bigwig_paths, sample_idxs))]
+    with joblib.parallel_backend('loky', n_jobs=n_jobs, inner_max_num_threads=threads_per_job):
+        joblib.Parallel()(tasks)
+
+    zarr.consolidate_metadata(seqdata_path)  # type: ignore
+
+
+def read_bam(
+    out_arr: zarr.Array,
+    bam_path: PathType,
+    bed: pd.DataFrame,
+    batch_size: int,
+    sample_idx: int
+):
+    length = bed.at[0, 'chromEnd'] - bed.at[0, 'chromStart']
+    batch = np.zeros((batch_size, length), np.uint16)
+    batch_start_idx = 0
+    batch_idx = 0
+    with pysam.AlignmentFile(str(bam_path)) as f:
+        for i, row in tqdm(bed.iterrows(), total=len(bed)):
+            contig, start, end = row[:3]
+            a, c, g, t = f.count_coverage(contig, start, end, read_callback="all")
+            batch[batch_idx] = np.vstack([a, c, g, t]).sum(0).astype(np.uint16)
+            if batch_idx == batch_size - 1:
+                out_arr[batch_start_idx : batch_start_idx + batch_size, :, sample_idx] = batch
+                batch_idx = 0
+                batch_start_idx += batch_size
+            else:
+                batch_idx += 1
+    if batch_idx != batch_size:
+        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[:batch_idx]
+
+
+def read_bams(
+    name: str,
+    bam_paths: List[PathType],
+    sample_names: List[str],
+    bed_path: PathType,
+    seqdata_path: PathType,
+    length: int,
+    batch_size: int,
+    n_jobs: int = 1,
+    threads_per_job: int = 1,
+):
+    compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+    
+    bed = _read_bedlike(bed_path)
+    _set_uniform_length_around_center(bed, length)
+    _df_to_xr_zarr(bed, seqdata_path, ["sequence"], compressor=compressor)
+    
+    batch_size = min(len(bed), batch_size)
+    z = zarr.open_group(seqdata_path)
+    
+    arr = z.array('samples', data=np.array(sample_names, object), chunks=100, compressor=compressor, overwrite=True)
+    arr.attrs["_ARRAY_DIMENSIONS"] = ["sample"]
+    
+    coverage = z.zeros(
+        name,
+        shape=(len(bed), length),
+        dtype=np.uint16,
+        chunks=(batch_size, None),
+        overwrite=True,
+        compressor=compressor,
+        filters=[Delta(np.uint16)],
+    )
+    coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length", "sample"]
+    
+    sample_idxs = np.arange(len(sample_names))
+    tasks = [joblib.delayed(read_bam(coverage, bam, bed, batch_size, sample_idx) for bam, sample_idx in zip(bam_paths, sample_idxs))]
+    with joblib.parallel_backend('loky', n_jobs=n_jobs, inner_max_num_threads=threads_per_job):
+        joblib.Parallel()(tasks)
+    
+    zarr.consolidate_metadata(seqdata_path)  # type: ignore

@@ -42,6 +42,7 @@ def _filter_varm(ds: xr.Dataset):
 def _filter_uns(ds: xr.Dataset):
     selector = []
     for name, arr in ds.data_vars.items():
+        # All dimensions are not 'sequence' or 'length'
         if np.isin(arr.dims, ["sequence", "length"], invert=True).all():  # type: ignore
             selector.append(name)
     return ds[selector]
