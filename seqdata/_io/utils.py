@@ -1,8 +1,8 @@
 from pathlib import Path
 from typing import List, Optional, Union
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import zarr
 
 PathType = Union[str, Path]
@@ -14,7 +14,7 @@ def _read_and_concat_dataframes(
     sep: str = "\t",
     low_memory: bool = False,
     compression: str = "infer",
-    **kwargs
+    **kwargs,
 ) -> pd.DataFrame:
     """Reads a list of files and concatenates them into a single dataframe.
 
@@ -50,22 +50,25 @@ def _read_and_concat_dataframes(
             names=col_names,
             compression=compression,  # type: ignore
             header=0,
-            **kwargs
+            **kwargs,
         )
         dfs.append(x)
     dataframe = pd.concat(dfs, ignore_index=True)
     return dataframe
 
+
 def _read_bedlike(path: PathType):
     path = Path(path)
-    if path.suffix == '.bed':
+    if path.suffix == ".bed":
         return _read_bed(path)
-    elif path.suffix == '.narrowPeak':
+    elif path.suffix == ".narrowPeak":
         return _read_narrowpeak(path)
-    elif path.suffix == '.broadPeak':
+    elif path.suffix == ".broadPeak":
         return _read_broadpeak(path)
     else:
-        raise ValueError(f'Unrecognized file extension: {path.suffix}. Expected one of .bed, .narrowPeak, or .broadPeak')
+        raise ValueError(
+            f"Unrecognized file extension: {path.suffix}. Expected one of .bed, .narrowPeak, or .broadPeak"
+        )
 
 
 def _read_bed(bed_path: PathType):
@@ -144,8 +147,8 @@ def _read_broadpeak(broadpeak_path: PathType):
 
 
 def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
-    if 'peak' in bed:
-        center = bed['chromStart'] + bed['peak']
+    if "peak" in bed:
+        center = bed["chromStart"] + bed["peak"]
     else:
         center = (bed["chromStart"] + bed["chromEnd"]) / 2
     bed["chromStart"] = (center - length / 2).round().astype(np.uint64)

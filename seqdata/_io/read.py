@@ -1,13 +1,16 @@
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast
 
 import joblib
+import numba
 import numpy as np
 import pandas as pd
 import pyBigWig
 import pysam
 import zarr
+from cyvcf2 import VCF
 from numcodecs import Delta, blosc
+from numpy.typing import NDArray
 from tqdm import tqdm
 
 from .. import SeqData
@@ -95,30 +98,34 @@ def read_csvs(
 
 
 def read_fasta(
-    seq_name: str,
-    id_name: str,
-    fasta_path: PathType,
-    seqdata_path: PathType,
+    name: str,
+    fasta: PathType,
+    out: PathType,
     batch_size: int,
+    n_threads: int = 1,
+    overwrite=False,
 ):
     """Write a SeqData from a FASTA file where each contig is a sequence.
 
     Parameters
     ----------
-    seq_name : str
+    name : str
         Name of array for FASTA sequences
-    id_name : str
-        Name of array for FASTA sequence IDs
     fasta_path : str, Path
     seqdata_path : str, Path
     batch_size : int
         Make this as large as RAM allows. How many sequences to IO at a time.
     """
-    z = zarr.open_group(seqdata_path)
-    with pysam.FastaFile(str(fasta_path)) as f:
+    blosc.set_nthreads(n_threads)
+    compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+    z = zarr.open_group(out)
+    with pysam.FastaFile(str(fasta)) as f:
         seq_names = f.references
 
-        arr = z.array(id_name, data=np.array(list(seq_names), object), overwrite=True)
+        arr = z.array(
+            f"{name}_id", data=np.array(list(seq_names), object), overwrite=overwrite
+        )
         arr.attrs["_ARRAY_DIMENSIONS"] = ["sequence"]
 
         n_seqs = len(seq_names)
@@ -126,12 +133,12 @@ def read_fasta(
         batch_size = min(n_seqs, batch_size)
 
         seqs = z.empty(
-            seq_name,
+            name,
             shape=(n_seqs, length),
             dtype="|S1",
-            chunks=(int(1e3), None),
-            overwrite=True,
-            compressor=blosc.Blosc("zstd", clevel=7, shuffle=-1),
+            chunks=(batch_size, None),
+            overwrite=overwrite,
+            compressor=compressor,
         )
         seqs.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length"]
         batch = np.empty((batch_size, length), dtype="|S1")
@@ -148,21 +155,77 @@ def read_fasta(
     if batch_idx != batch_size:
         seqs[batch_start_idx : batch_start_idx + batch_idx] = batch[:batch_idx]
 
-    zarr.consolidate_metadata(seqdata_path)  # type: ignore
+    zarr.consolidate_metadata(out)  # type: ignore
 
 
-def read_bigwig(
-    out_arr: zarr.Array,
-    bigwig_path: PathType,
+def read_genome_fasta(
+    name: str,
+    fasta: PathType,
+    bed: PathType,
+    out: PathType,
+    length: int,
+    batch_size: int,
+    n_threads: int = 1,
+    overwrite=False,
+):
+    blosc.set_nthreads(n_threads)
+    compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+    _bed = _read_bedlike(bed)
+    _set_uniform_length_around_center(_bed, length)
+    _df_to_xr_zarr(_bed, out, ["sequence"], compressor=compressor, overwrite=overwrite)
+
+    n_seqs = len(_bed)
+    batch_size = min(n_seqs, batch_size)
+
+    z = zarr.open_group(out)
+    with pysam.FastaFile(str(fasta)) as f:
+        seqs = z.empty(
+            name,
+            shape=(n_seqs, length),
+            dtype="|S1",
+            chunks=(batch_size, None),
+            overwrite=overwrite,
+            compressor=compressor,
+        )
+        seqs.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length"]
+        batch = np.empty((batch_size, length), dtype="|S1")
+        batch_start_idx = 0
+        batch_idx = 0
+        for i, row in tqdm(_bed.iterrows()):
+            contig, start, end = row[:3]
+            batch[batch_idx] = np.frombuffer(
+                f.fetch(contig, start, end).encode("ascii"), "|S1"
+            )
+            if batch_idx == batch_size - 1:
+                seqs[batch_start_idx : batch_start_idx + batch_size] = batch
+                batch_idx = 0
+                batch_start_idx += batch_size
+            else:
+                batch_idx += 1
+    if batch_idx != batch_size:
+        seqs[batch_start_idx : batch_start_idx + batch_idx] = batch[:batch_idx]
+
+    zarr.consolidate_metadata(out)  # type: ignore
+
+
+def _read_bigwig(
+    coverage: zarr.Array,
+    bigwig: PathType,
     bed: pd.DataFrame,
     batch_size: int,
     sample_idx: int,
+    n_threads: int,
 ):
+    blosc.set_nthreads(n_threads)
+
     length = bed.at[0, "chromEnd"] - bed.at[0, "chromStart"]
+
     batch = np.zeros((batch_size, length), np.uint16)
+
     batch_start_idx = 0
     batch_idx = 0
-    with pyBigWig.open(bigwig_path) as f:
+    with pyBigWig.open(bigwig) as f:
         for i, row in tqdm(bed.iterrows(), total=len(bed)):
             contig, start, end = row[:3]
             intervals = f.intervals(contig, start, end)
@@ -173,7 +236,7 @@ def read_bigwig(
                     value = interval[2]
                     batch[batch_idx, rel_start:rel_end] = value
             if batch_idx == batch_size - 1:
-                out_arr[
+                coverage[
                     batch_start_idx : batch_start_idx + batch_size, :, sample_idx
                 ] = batch
                 batch_idx = 0
@@ -181,56 +244,82 @@ def read_bigwig(
             else:
                 batch_idx += 1
     if batch_idx != batch_size:
-        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[
+        coverage[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[
             :batch_idx
         ]
 
 
 def read_bigwigs(
     name: str,
-    bigwig_paths: List[PathType],
-    sample_names: List[str],
-    bed_path: PathType,
-    seqdata_path: PathType,
+    bigwigs: List[PathType],
+    samples: List[str],
+    bed: PathType,
+    out: PathType,
     length: int,
     batch_size: int,
     n_jobs: int = 1,
     threads_per_job: int = 1,
+    overwrite=False,
 ):
+    """Read multiple bigWigs into a SeqData Zarr.
+
+    Parameters
+    ----------
+    name : str
+        Name of the array in the Zarr.
+    bigwig_paths : list[str | Path]
+        List of bigWigs to process.
+    sample_names : list[str]
+        List of sample names corresponding to each bigWig.
+    bed_path : str | Path
+        Path to BED file specifying regions to write coverage for.
+        Centered and uniform length regions will be pulled from this.
+    seqdata_path : str | Path
+        Path to write SeqData Zarr.
+    length : int
+        Length of regions of interest.
+    batch_size : int
+        Number of regions of interest to process at a time. Set this to be as large as RAM allows.
+    n_jobs : int, optional
+        Number of jobs for parallel processing, by default 1
+    threads_per_job : int, optional
+        Number of threads per job, by default 1
+    """
     compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
 
-    bed = _read_bedlike(bed_path)
-    _set_uniform_length_around_center(bed, length)
-    _df_to_xr_zarr(bed, seqdata_path, ["sequence"])
+    _bed = _read_bedlike(bed)
+    _set_uniform_length_around_center(_bed, length)
+    _df_to_xr_zarr(_bed, out, ["sequence"], compressor=compressor, overwrite=overwrite)
 
-    batch_size = min(len(bed), batch_size)
-    z = zarr.open_group(seqdata_path)
+    batch_size = min(len(_bed), batch_size)
+    z = zarr.open_group(out)
 
     arr = z.array(
         f"{name}_samples",
-        data=np.array(sample_names, object),
-        chunks=100,
+        data=np.array(samples, object),
         compressor=compressor,
-        overwrite=True,
+        overwrite=overwrite,
     )
     arr.attrs["_ARRAY_DIMENSIONS"] = [f"{name}_sample"]
 
     coverage = z.zeros(
         name,
-        shape=(len(bed), length, len(sample_names)),
+        shape=(len(_bed), length, len(samples)),
         dtype=np.uint16,
         chunks=(batch_size, None),
-        overwrite=True,
+        overwrite=overwrite,
         compressor=compressor,
         filters=[Delta(np.uint16)],
     )
     coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length", f"{name}_sample"]
 
-    sample_idxs = np.arange(len(sample_names))
+    sample_idxs = np.arange(len(samples))
     tasks = [
         joblib.delayed(
-            read_bigwig(coverage, bigwig, bed, batch_size, sample_idx)
-            for bigwig, sample_idx in zip(bigwig_paths, sample_idxs)
+            _read_bigwig(
+                coverage, bigwig, _bed, batch_size, sample_idx, threads_per_job
+            )
+            for bigwig, sample_idx in zip(bigwigs, sample_idxs)
         )
     ]
     with joblib.parallel_backend(
@@ -238,27 +327,32 @@ def read_bigwigs(
     ):
         joblib.Parallel()(tasks)
 
-    zarr.consolidate_metadata(seqdata_path)  # type: ignore
+    zarr.consolidate_metadata(out)  # type: ignore
 
 
-def read_bam(
-    out_arr: zarr.Array,
-    bam_path: PathType,
+def _read_bam(
+    coverage: zarr.Array,
+    bam: PathType,
     bed: pd.DataFrame,
     batch_size: int,
     sample_idx: int,
+    n_threads: int,
 ):
+    blosc.set_nthreads(n_threads)
+
     length = bed.at[0, "chromEnd"] - bed.at[0, "chromStart"]
+
     batch = np.zeros((batch_size, length), np.uint16)
+
     batch_start_idx = 0
     batch_idx = 0
-    with pysam.AlignmentFile(str(bam_path)) as f:
+    with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
         for i, row in tqdm(bed.iterrows(), total=len(bed)):
             contig, start, end = row[:3]
             a, c, g, t = f.count_coverage(contig, start, end, read_callback="all")
             batch[batch_idx] = np.vstack([a, c, g, t]).sum(0).astype(np.uint16)
             if batch_idx == batch_size - 1:
-                out_arr[
+                coverage[
                     batch_start_idx : batch_start_idx + batch_size, :, sample_idx
                 ] = batch
                 batch_idx = 0
@@ -266,56 +360,56 @@ def read_bam(
             else:
                 batch_idx += 1
     if batch_idx != batch_size:
-        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[
+        coverage[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[
             :batch_idx
         ]
 
 
 def read_bams(
     name: str,
-    bam_paths: List[PathType],
-    sample_names: List[str],
-    bed_path: PathType,
-    seqdata_path: PathType,
+    bams: List[PathType],
+    samples: List[str],
+    bed: PathType,
+    out: PathType,
     length: int,
     batch_size: int,
     n_jobs: int = 1,
     threads_per_job: int = 1,
+    overwrite=False,
 ):
     compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
 
-    bed = _read_bedlike(bed_path)
-    _set_uniform_length_around_center(bed, length)
-    _df_to_xr_zarr(bed, seqdata_path, ["sequence"], compressor=compressor)
+    _bed = _read_bedlike(bed)
+    _set_uniform_length_around_center(_bed, length)
+    _df_to_xr_zarr(_bed, out, ["sequence"], compressor=compressor, overwrite=overwrite)
 
-    batch_size = min(len(bed), batch_size)
-    z = zarr.open_group(seqdata_path)
+    batch_size = min(len(_bed), batch_size)
+    z = zarr.open_group(out)
 
     arr = z.array(
         f"{name}_samples",
-        data=np.array(sample_names, object),
-        chunks=100,
+        data=np.array(samples, object),
         compressor=compressor,
-        overwrite=True,
+        overwrite=overwrite,
     )
     arr.attrs["_ARRAY_DIMENSIONS"] = [f"{name}_sample"]
 
     coverage = z.zeros(
         name,
-        shape=(len(bed), length, len(sample_names)),
+        shape=(len(_bed), length, len(samples)),
         dtype=np.uint16,
         chunks=(batch_size, None),
-        overwrite=True,
+        overwrite=overwrite,
         compressor=compressor,
         filters=[Delta(np.uint16)],
     )
     coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length", f"{name}_sample"]
 
-    sample_idxs = np.arange(len(sample_names))
+    sample_idxs = np.arange(len(samples))
     tasks = [
         joblib.delayed(
-            read_bam(coverage, bam, bed, batch_size, sample_idx)
-            for bam, sample_idx in zip(bam_paths, sample_idxs)
+            _read_bam(coverage, bam, _bed, batch_size, sample_idx, threads_per_job)
+            for bam, sample_idx in zip(bams, sample_idxs)
         )
     ]
     with joblib.parallel_backend(
@@ -323,4 +417,153 @@ def read_bams(
     ):
         joblib.Parallel()(tasks)
 
-    zarr.consolidate_metadata(seqdata_path)  # type: ignore
+    zarr.consolidate_metadata(out)  # type: ignore
+
+
+@numba.jit(nopython=True, nogil=True, parallel=True)
+def _apply_variants(
+    seqs: NDArray[np.bytes_],
+    positions: NDArray[np.integer],
+    alleles: NDArray[np.bytes_],
+    offsets: NDArray[np.unsignedinteger],
+):
+    # shapes:
+    # seqs (i l)
+    # variants (v)
+    # positions (v)
+    # offsets (i+1)
+
+    for i in numba.prange(len(seqs)):
+        i_vars = alleles[offsets[i] : offsets[i + 1]]
+        i_pos = positions[offsets[i] : offsets[i + 1]]
+        seq = seqs[i]
+        seq[i_pos] = i_vars
+
+
+def read_vcfs(
+    name: str,
+    vcf: PathType,
+    fasta: PathType,
+    bed: PathType,
+    out: PathType,
+    samples: List[str],
+    length: int,
+    batch_size: int,
+    n_threads: int = 1,
+    samples_per_chunk: int = 10,
+    overwrite=False,
+):
+    raise NotImplementedError
+    blosc.set_nthreads(n_threads)
+    compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+    _bed = _read_bedlike(bed)
+    _set_uniform_length_around_center(_bed, length)
+    _df_to_xr_zarr(_bed, out, ["sequence"], compressor=compressor, overwrite=overwrite)
+
+    n_seqs = len(_bed)
+
+    z = zarr.open_group(out)
+    seqs = z.empty(
+        name,
+        shape=(n_seqs, length, len(samples), 2),
+        dtype="|S1",
+        chunks=(batch_size, None, samples_per_chunk, None),
+        overwrite=overwrite,
+        compressor=compressor,
+    )
+    seqs.attrs["_ARRAY_DIMENSIONS"] = [
+        "sequence",
+        "length",
+        f"{name}_sample",
+        "haplotype",
+    ]
+
+    arr = z.array(
+        f"{name}_samples",
+        np.array(samples, object),
+        compressor=compressor,
+        overwrite=overwrite,
+    )
+    arr.attrs["_ARRAY_DIMENSIONS"] = [f"{name}_sample"]
+
+    n_seqs = len(_bed)
+    batch_size = min(n_seqs, batch_size)
+
+    def get_pos_bases(v):
+        # change to bytes and extract alleles
+        alleles = v.gt_bases.astype("S").reshape(-1, 1).view("S1")[:, [0, 2]]
+        # change unknown to reference
+        alleles[alleles == "."] = v.REF
+        # make position 0-indexed
+        return v.POS - 1, alleles
+
+    _vcf = VCF(vcf, lazy=True, samples=samples, threads=n_threads)
+    *_, sample_order = np.intersect1d(
+        _vcf.samples, samples, assume_unique=True, return_indices=True
+    )
+    _positions = []
+    _alleles = []
+    counts = np.empty(batch_size, "u4")
+    # (sequences length samples haplotypes)
+    batch = cast(
+        NDArray[np.bytes_], np.empty((batch_size, length, len(samples), 2), dtype="|S1")
+    )
+    batch_start_idx = 0
+    batch_idx = 0
+    with pysam.FastaFile(str(fasta)) as f:
+        for i, row in tqdm(_bed.iterrows()):
+            contig, start, end = row[:3]
+
+            # set reference sequence
+            # (length)
+            seq = np.frombuffer(f.fetch(contig, start, end).encode("ascii"), "|S1")
+            # (length samples haplotypes)
+            batch[batch_idx] = np.tile(seq, (1, len(samples), 2))
+
+            # get variant positions & alleles and how many are in each region
+            region = f"{contig}:{start+1}-{end}"
+            _q_positions, _q_alleles = zip(
+                *[get_pos_bases(v) for v in _vcf(region) if v.is_snp]
+            )
+            # (variants)
+            q_positions = cast(NDArray[np.int64], np.array(_q_positions)) - start
+            # (variants samples haplotypes)
+            q_alleles = cast(
+                NDArray[np.bytes_], np.stack(_q_alleles, 0)[:, sample_order, :]
+            )
+            _positions.append(q_positions)
+            _alleles.append(q_alleles)
+            counts[batch_idx] = len(q_positions)
+
+            if batch_idx == batch_size - 1:
+                positions = np.concatenate(_positions)
+                alleles = np.concatenate(_alleles)
+                offsets = np.zeros(len(counts) + 1, dtype=counts.dtype)
+                counts.cumsum(out=offsets[1:])
+
+                _apply_variants(batch, positions, alleles, offsets)
+
+                seqs[batch_start_idx : batch_start_idx + batch_size] = batch
+
+                _positions = []
+                _alleles = []
+                batch_idx = 0
+                batch_start_idx += batch_size
+            else:
+                batch_idx += 1
+    if batch_idx != batch_size:
+        last_batch = batch[:batch_idx]
+
+        positions = np.concatenate(_positions)
+        alleles = np.concatenate(_alleles)
+        offsets = np.zeros(batch_idx, dtype=counts.dtype)
+        counts[:batch_idx].cumsum(out=offsets[1:])
+
+        _apply_variants(last_batch, positions, alleles, offsets)
+
+        seqs[batch_start_idx : batch_start_idx + batch_idx] = last_batch
+
+    _vcf.close()
+
+    zarr.consolidate_metadata(out)  # type: ignore
