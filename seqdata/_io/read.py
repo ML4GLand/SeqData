@@ -11,7 +11,12 @@ from numcodecs import Delta, blosc
 from tqdm import tqdm
 
 from .. import SeqData
-from .utils import _read_and_concat_dataframes, _read_bedlike, _set_uniform_length_around_center, _df_to_xr_zarr
+from .utils import (
+    _df_to_xr_zarr,
+    _read_and_concat_dataframes,
+    _read_bedlike,
+    _set_uniform_length_around_center,
+)
 
 PathType = Union[str, Path]
 
@@ -142,6 +147,7 @@ def read_fasta(
                 batch_idx += 1
     if batch_idx != batch_size:
         seqs[batch_start_idx : batch_start_idx + batch_idx] = batch[:batch_idx]
+
     zarr.consolidate_metadata(seqdata_path)  # type: ignore
 
 
@@ -150,9 +156,9 @@ def read_bigwig(
     bigwig_path: PathType,
     bed: pd.DataFrame,
     batch_size: int,
-    sample_idx: int
+    sample_idx: int,
 ):
-    length = bed.at[0, 'chromEnd'] - bed.at[0, 'chromStart']
+    length = bed.at[0, "chromEnd"] - bed.at[0, "chromStart"]
     batch = np.zeros((batch_size, length), np.uint16)
     batch_start_idx = 0
     batch_idx = 0
@@ -167,13 +173,17 @@ def read_bigwig(
                     value = interval[2]
                     batch[batch_idx, rel_start:rel_end] = value
             if batch_idx == batch_size - 1:
-                out_arr[batch_start_idx : batch_start_idx + batch_size, :, sample_idx] = batch
+                out_arr[
+                    batch_start_idx : batch_start_idx + batch_size, :, sample_idx
+                ] = batch
                 batch_idx = 0
                 batch_start_idx += batch_size
             else:
                 batch_idx += 1
     if batch_idx != batch_size:
-        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[:batch_idx]
+        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[
+            :batch_idx
+        ]
 
 
 def read_bigwigs(
@@ -188,31 +198,44 @@ def read_bigwigs(
     threads_per_job: int = 1,
 ):
     compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
-    
+
     bed = _read_bedlike(bed_path)
     _set_uniform_length_around_center(bed, length)
     _df_to_xr_zarr(bed, seqdata_path, ["sequence"])
 
     batch_size = min(len(bed), batch_size)
     z = zarr.open_group(seqdata_path)
-    
-    arr = z.array('samples', data=np.array(sample_names, object), chunks=100, compressor=compressor, overwrite=True)
-    arr.attrs["_ARRAY_DIMENSIONS"] = ["sample"]
-    
+
+    arr = z.array(
+        f"{name}_samples",
+        data=np.array(sample_names, object),
+        chunks=100,
+        compressor=compressor,
+        overwrite=True,
+    )
+    arr.attrs["_ARRAY_DIMENSIONS"] = [f"{name}_sample"]
+
     coverage = z.zeros(
         name,
-        shape=(len(bed), length),
+        shape=(len(bed), length, len(sample_names)),
         dtype=np.uint16,
         chunks=(batch_size, None),
         overwrite=True,
         compressor=compressor,
         filters=[Delta(np.uint16)],
     )
-    coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length"]
-    
+    coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length", f"{name}_sample"]
+
     sample_idxs = np.arange(len(sample_names))
-    tasks = [joblib.delayed(read_bigwig(coverage, bigwig, bed, batch_size, sample_idx) for bigwig, sample_idx in zip(bigwig_paths, sample_idxs))]
-    with joblib.parallel_backend('loky', n_jobs=n_jobs, inner_max_num_threads=threads_per_job):
+    tasks = [
+        joblib.delayed(
+            read_bigwig(coverage, bigwig, bed, batch_size, sample_idx)
+            for bigwig, sample_idx in zip(bigwig_paths, sample_idxs)
+        )
+    ]
+    with joblib.parallel_backend(
+        "loky", n_jobs=n_jobs, inner_max_num_threads=threads_per_job
+    ):
         joblib.Parallel()(tasks)
 
     zarr.consolidate_metadata(seqdata_path)  # type: ignore
@@ -223,9 +246,9 @@ def read_bam(
     bam_path: PathType,
     bed: pd.DataFrame,
     batch_size: int,
-    sample_idx: int
+    sample_idx: int,
 ):
-    length = bed.at[0, 'chromEnd'] - bed.at[0, 'chromStart']
+    length = bed.at[0, "chromEnd"] - bed.at[0, "chromStart"]
     batch = np.zeros((batch_size, length), np.uint16)
     batch_start_idx = 0
     batch_idx = 0
@@ -235,13 +258,17 @@ def read_bam(
             a, c, g, t = f.count_coverage(contig, start, end, read_callback="all")
             batch[batch_idx] = np.vstack([a, c, g, t]).sum(0).astype(np.uint16)
             if batch_idx == batch_size - 1:
-                out_arr[batch_start_idx : batch_start_idx + batch_size, :, sample_idx] = batch
+                out_arr[
+                    batch_start_idx : batch_start_idx + batch_size, :, sample_idx
+                ] = batch
                 batch_idx = 0
                 batch_start_idx += batch_size
             else:
                 batch_idx += 1
     if batch_idx != batch_size:
-        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[:batch_idx]
+        out_arr[batch_start_idx : batch_start_idx + batch_idx, :, sample_idx] = batch[
+            :batch_idx
+        ]
 
 
 def read_bams(
@@ -256,31 +283,44 @@ def read_bams(
     threads_per_job: int = 1,
 ):
     compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
-    
+
     bed = _read_bedlike(bed_path)
     _set_uniform_length_around_center(bed, length)
     _df_to_xr_zarr(bed, seqdata_path, ["sequence"], compressor=compressor)
-    
+
     batch_size = min(len(bed), batch_size)
     z = zarr.open_group(seqdata_path)
-    
-    arr = z.array('samples', data=np.array(sample_names, object), chunks=100, compressor=compressor, overwrite=True)
-    arr.attrs["_ARRAY_DIMENSIONS"] = ["sample"]
-    
+
+    arr = z.array(
+        f"{name}_samples",
+        data=np.array(sample_names, object),
+        chunks=100,
+        compressor=compressor,
+        overwrite=True,
+    )
+    arr.attrs["_ARRAY_DIMENSIONS"] = [f"{name}_sample"]
+
     coverage = z.zeros(
         name,
-        shape=(len(bed), length),
+        shape=(len(bed), length, len(sample_names)),
         dtype=np.uint16,
         chunks=(batch_size, None),
         overwrite=True,
         compressor=compressor,
         filters=[Delta(np.uint16)],
     )
-    coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length", "sample"]
-    
+    coverage.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length", f"{name}_sample"]
+
     sample_idxs = np.arange(len(sample_names))
-    tasks = [joblib.delayed(read_bam(coverage, bam, bed, batch_size, sample_idx) for bam, sample_idx in zip(bam_paths, sample_idxs))]
-    with joblib.parallel_backend('loky', n_jobs=n_jobs, inner_max_num_threads=threads_per_job):
+    tasks = [
+        joblib.delayed(
+            read_bam(coverage, bam, bed, batch_size, sample_idx)
+            for bam, sample_idx in zip(bam_paths, sample_idxs)
+        )
+    ]
+    with joblib.parallel_backend(
+        "loky", n_jobs=n_jobs, inner_max_num_threads=threads_per_job
+    ):
         joblib.Parallel()(tasks)
-    
+
     zarr.consolidate_metadata(seqdata_path)  # type: ignore
