@@ -1,6 +1,6 @@
 from pathlib import Path
 from textwrap import dedent
-from typing import Generic, List, Tuple, Type, Union, cast
+from typing import Generic, List, Optional, Tuple, Type, Union, cast
 
 import cyvcf2
 import joblib
@@ -13,9 +13,10 @@ from numcodecs import Blosc, Delta, blosc
 from numpy.typing import NDArray
 from tqdm import tqdm
 
+from seqdata.alphabets import ALPHABETS, SequenceAlphabet
 from seqdata.types import DTYPE, FlatReader, PathType, RegionReader
 
-from .utils import _batch_io, _df_to_xr_zarr
+from .utils import _batch_io, _batch_io_bed, _df_to_xr_zarr
 
 
 class Table(FlatReader):
@@ -176,11 +177,18 @@ class GenomeFASTA(RegionReader):
         fasta: PathType,
         batch_size: int,
         n_threads: int = 1,
+        alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     ) -> None:
         self.name = name
         self.fasta = fasta
         self.batch_size = batch_size
         self.n_threads = n_threads
+        if alphabet is None:
+            self.alphabet = ALPHABETS["DNA"]
+        elif isinstance(alphabet, str):
+            self.alphabet = ALPHABETS[alphabet]
+        else:
+            self.alphabet = alphabet
 
     def _reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
         for i, row in tqdm(bed.iterrows()):
@@ -205,6 +213,7 @@ class GenomeFASTA(RegionReader):
 
         n_seqs = len(bed)
         batch_size = min(n_seqs, self.batch_size)
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
         z = zarr.open_group(out)
         seqs = z.empty(
@@ -219,12 +228,14 @@ class GenomeFASTA(RegionReader):
 
         batch = cast(NDArray[np.bytes_], np.empty((batch_size, length), dtype="|S1"))
         with pysam.FastaFile(str(self.fasta)) as f:
-            _batch_io(
+            _batch_io_bed(
                 seqs,
                 batch,
                 self._reader(bed, f),
                 self._write_row_to_batch,
                 self._write_batch_to_sink,
+                to_rc,
+                self.alphabet,
             )
 
 
@@ -288,15 +299,16 @@ class BigWig(RegionReader, Generic[DTYPE]):
 
         blosc.set_nthreads(n_threads)
         length = bed.at[0, "chromEnd"] - bed.at[0, "chromStart"]
-
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
         batch = np.zeros((batch_size, length), self.dtype)
         with pyBigWig.open(bigwig) as f:
-            _batch_io(
+            _batch_io_bed(
                 coverage,
                 batch,
                 self._reader(bed, f),
                 self._write_row_to_batch,
                 write_batch_to_sink,
+                to_rc,
             )
 
     def _write(
@@ -390,18 +402,17 @@ class BAM(RegionReader, Generic[DTYPE]):
             sink[start_idx : start_idx + len(batch), :, sample_idx] = batch
 
         blosc.set_nthreads(n_threads)
-
         length = bed.at[0, "chromEnd"] - bed.at[0, "chromStart"]
-
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
         batch = np.zeros((batch_size, length), self.dtype)
-
         with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
-            _batch_io(
+            _batch_io_bed(
                 coverage,
                 batch,
                 self._reader(bed, f),
                 self._write_row_to_batch,
                 write_batch_to_sink,
+                to_rc,
             )
 
     def _write(
@@ -460,6 +471,7 @@ class VCF(RegionReader):
         batch_size: int,
         n_threads: int = 1,
         samples_per_chunk: int = 10,
+        alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     ) -> None:
         self.name = name
         self.vcf = vcf
@@ -468,6 +480,12 @@ class VCF(RegionReader):
         self.batch_size = batch_size
         self.n_threads = n_threads
         self.samples_per_chunk = samples_per_chunk
+        if alphabet is None:
+            self.alphabet = ALPHABETS["DNA"]
+        elif isinstance(alphabet, str):
+            self.alphabet = ALPHABETS[alphabet]
+        else:
+            self.alphabet = alphabet
 
     def _get_pos_bases(self, v):
         # change to bytes and extract alleles
@@ -549,6 +567,8 @@ class VCF(RegionReader):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
         _vcf = cyvcf2.VCF(
             self.vcf, lazy=True, samples=self.samples, threads=self.n_threads
         )
@@ -561,12 +581,14 @@ class VCF(RegionReader):
             np.empty((batch_size, length, len(self.samples), 2), dtype="|S1"),
         )
         with pysam.FastaFile(str(self.fasta)) as f:
-            _batch_io(
+            _batch_io_bed(
                 seqs,
                 batch,
                 self._reader(bed, f, _vcf, sample_order),
                 self._write_row_to_batch,
                 self._write_batch_to_sink,
+                to_rc,
+                self.alphabet,
             )
 
         _vcf.close()

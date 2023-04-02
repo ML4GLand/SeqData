@@ -37,7 +37,7 @@ sd.read_h5sd()
 
 ## Sequence analysis
 
-### Calculate sequence properties (e.g. GC content
+### Calculate sequence properties (e.g. GC content)
 
 ### Visaulize sequence properties
 

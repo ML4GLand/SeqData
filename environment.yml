@@ -1,0 +1,16 @@
+name: seqdata
+channels:
+  - bioconda
+  - conda-forge
+  - nodefaults
+dependencies:
+  - cyvcf2
+  - dask
+  - pandas
+  - pandera
+  - pybigwig
+  - pysam
+  - tqdm
+  - typing_extensions
+  - xarray
+  - zarr
