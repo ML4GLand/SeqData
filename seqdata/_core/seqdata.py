@@ -1,10 +1,12 @@
 from pathlib import Path
-from typing import Optional, Union
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Union
 
+import numpy as np
 import pandas as pd
 import xarray as xr
 import zarr
 from numcodecs import Blosc
+from numpy.typing import NDArray
 from typing_extensions import Self
 
 from seqdata._io.utils import (
@@ -20,12 +22,16 @@ from .utils import (
     _filter_obsm,
     _filter_uns,
     _filter_varm,
+    cartesian_product,
 )
 
+try:
+    import torch
+    from torch.utils.data import DataLoader, Sampler
 
-def concat(*sdatas: "SeqData"):
-    ds = xr.concat([sdata.ds for sdata in sdatas], dim="sequence")
-    return SeqData(ds)
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 
 class SeqData:
@@ -249,3 +255,107 @@ class SeqData:
 
         self = SeqData.open_zarr(self.path)
         return self
+
+    def get_torch_dataloader(
+        self,
+        sample_dims: Union[str, List[str]],
+        variables: List[str],
+        transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+        batch_size: Optional[int] = 1,
+        shuffle: bool = False,
+        sampler: Optional[Union["Sampler", Iterable]] = None,
+        batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+        num_workers: int = 0,
+        pin_memory: bool = False,
+        drop_last: bool = False,
+        timeout: float = 0,
+        worker_init_fn=None,
+        multiprocessing_context=None,
+        generator=None,
+        *,
+        prefetch_factor: int = 2,
+        persistent_workers: bool = False,
+    ) -> "DataLoader":
+        """Get a PyTorch DataLoader for this SeqData.
+
+        Parameters
+        ----------
+        sample_dims : str or list[str]
+            Sample dimensions will be sliced/reduced over when fetching batches. For example,
+            if `sample_dims = ['sequence', 'sample']` for variable with dimensions `['sequence', 'length', 'sample']`
+            then a batch of data will have dimensions `['batch', 'length']`.
+        variables : list[str]
+            Which variables to sample from.
+        transforms : Dict[str, (ndarray) -> Tensor], optional
+            Transforms to apply to each variable. Defaults to transforming arrays to Tensor.
+
+        For other parameters, see documentation for [DataLoader](https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader)
+
+        Returns
+        -------
+        DataLoader
+        """
+        if not TORCH_AVAILABLE:
+            raise ImportError("Install PyTorch to get DataLoader from SeqData.")
+
+        if transforms is None:
+            _transforms: Dict[str, Callable[[NDArray], "torch.Tensor"]] = {}
+        else:
+            _transforms = transforms
+
+        variables_not_in_ds = set(variables) - set(self.ds.data_vars.keys())
+        if variables_not_in_ds:
+            raise ValueError(
+                f"Got variables that are not in the SeqData: {variables_not_in_ds}"
+            )
+
+        transform_vars_not_in_vars = set(_transforms.keys()) - set(variables)
+        if transform_vars_not_in_vars:
+            raise ValueError(
+                f"Got transforms for variables that are not requested: {transform_vars_not_in_vars}"
+            )
+
+        transform_vars_not_in_ds = set(_transforms.keys()) - set(
+            self.ds.data_vars.keys()
+        )
+        if transform_vars_not_in_ds:
+            raise ValueError(
+                f"Got transforms for variables that are not in the SeqData: {transform_vars_not_in_ds}"
+            )
+
+        dim_sizes = [self.ds.dims[d] for d in sample_dims]
+        dataset = cartesian_product([np.arange(d) for d in dim_sizes])
+
+        def collate_fn(indices: List[NDArray]):
+            idx = np.vstack(indices)
+            selector = {
+                d: xr.DataArray(idx[:, i], dims="batch")
+                for i, d in enumerate(sample_dims)
+            }
+            out = {
+                k: arr.isel(selector, missing_dims="ignore").to_numpy()
+                for k, arr in self.ds[variables].data_vars.items()
+            }
+            out_tensors = {
+                k: _transforms.get(k, lambda x: torch.as_tensor(x))(arr)
+                for k, arr in out.items()
+            }
+            return out_tensors
+
+        return DataLoader(
+            dataset,  # type: ignore
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory,
+            drop_last=drop_last,
+            timeout=timeout,
+            worker_init_fn=worker_init_fn,
+            multiprocessing_context=multiprocessing_context,
+            generator=generator,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
+        )

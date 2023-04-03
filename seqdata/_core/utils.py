@@ -1,5 +1,7 @@
+from itertools import accumulate, chain, repeat
 from typing import Tuple, Union
 
+import numpy as np
 import xarray as xr
 
 
@@ -46,3 +48,18 @@ def _filter_uns(ds: xr.Dataset):
         if np.isin(arr.dims, ["sequence", "length"], invert=True).all():  # type: ignore
             selector.append(name)
     return ds[selector]
+
+
+def cartesian_product(arrays):
+    # https://stackoverflow.com/a/49445693
+    la = len(arrays)
+    L = *map(len, arrays), la
+    dtype = np.result_type(*arrays)
+    arr = np.empty(L, dtype=dtype)
+    arrs = (*accumulate(chain((arr,), repeat(0, la - 1)), np.ndarray.__getitem__),)
+    idx = slice(None), *repeat(None, la - 1)
+    for i in range(la - 1, 0, -1):
+        arrs[i][..., i] = arrays[i][idx[: la - i]]
+        arrs[i - 1][1:] = arrs[i]
+    arr[..., 0] = arrays[0][idx]
+    return arr.reshape(-1, la)
