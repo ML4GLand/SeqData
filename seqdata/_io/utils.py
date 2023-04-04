@@ -221,12 +221,13 @@ def _batch_io_bed(
             write_batch_to_sink(sink, batch, start_idx)
             start_idx += batch_size
             idx = 0
-    if idx != batch_size:
+    if idx != 0:
+        batch = batch[:idx]
         batch_to_rc = to_rc[start_idx:]
         if batch.dtype.type == np.bytes_:
             batch[batch_to_rc] = complement_bytes(batch[batch_to_rc], alphabet)  # type: ignore
         batch[batch_to_rc] = np.flip(batch[batch_to_rc], 1)
-        write_batch_to_sink(sink, batch[:idx], start_idx)
+        write_batch_to_sink(sink, batch, start_idx)
 
 
 def bytes_to_ohe(
@@ -263,7 +264,7 @@ def complement_bytes(
     complement_map : dict[bytes, bytes]
         Dictionary mapping nucleotides to their complements.
     """
-    # NOTE: a vectorized implementation is not faster for even IUPAC DNA/RNA
+    # NOTE: a vectorized implementation using np.unique is not faster even for IUPAC DNA/RNA.
     out = np.empty_like(byte_arr)
     for nuc, comp in alphabet.complement_map_bytes.items():
         if nuc == b"N":

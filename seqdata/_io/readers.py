@@ -138,7 +138,7 @@ class FlatFASTA(FlatReader):
             self.n_seqs = len(f.references)
 
     def _reader(self, f: pysam.FastaFile):
-        for seq_name in tqdm(f.references):
+        for seq_name in tqdm(f.references, total=len(f.references)):
             seq = f.fetch(seq_name).encode("ascii")
             out = cast(NDArray[np.bytes_], np.frombuffer(seq, "|S1"))
             yield out
@@ -211,13 +211,13 @@ class GenomeFASTA(RegionReader):
             self.alphabet = alphabet
 
     def _reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
-        for i, row in tqdm(bed.iterrows()):
+        for i, row in tqdm(bed.iterrows(), total=len(bed)):
             contig, start, end = row[:3]
             seq = f.fetch(contig, start, end).encode("ascii")
-            if (pad_len := len(seq) - end + start) > 0:
+            if (pad_len := end - start - len(seq)) > 0:
                 pad_left = start < 0
                 if pad_left:
-                    seq = b"N" * pad_len + seq
+                    seq = (b"N" * pad_len) + seq
                 else:
                     seq += b"N" * pad_len
             out = cast(NDArray[np.bytes_], np.frombuffer(seq, "|S1"))
