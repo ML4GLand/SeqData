@@ -1,301 +1,400 @@
-from ast import Raise
+from pathlib import Path
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Hashable,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
+
 import numpy as np
 import pandas as pd
-import pyranges as pr
-from typing import Any, Union, Optional, List
-from typing import Dict, Iterable, Sequence, Mapping
-from os import PathLike
-from collections import OrderedDict
-from functools import singledispatch
-from pandas.api.types import is_string_dtype
-from copy import deepcopy
-Index1D = Union[slice, int, str, np.int64, np.ndarray]
-from .utils import _gen_dataframe, convert_to_dict
+import xarray as xr
+import zarr
+from numcodecs import Blosc
+from numpy.typing import NDArray
+from typing_extensions import Self
+
+from seqdata._io.utils import (
+    _df_to_xr_zarr,
+    _read_bedlike,
+    _set_uniform_length_around_center,
+)
+from seqdata.types import FlatReader, PathType, RegionReader
+
+from .utils import (
+    _filter_by_exact_dims,
+    _filter_layers,
+    _filter_obsm,
+    _filter_uns,
+    _filter_varm,
+    cartesian_product,
+)
+
+try:
+    import torch
+    from torch.utils.data import DataLoader, Sampler
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
 
 
 class SeqData:
-    """SeqData object used to containerize and store data for EUGENe workflows.
-    
-    Attributes
-    ----------
-    seqs : np.ndarray
-        Numpy array of sequences.
-    names : np.ndarray
-        Numpy array of names.
-    seqs_annot : pr.PyRanges
-        PyRanges object or dict of sequences annotations.
-    pos_annot : pr.PyRanges
-        PyRanges object or dict of positions annotations.
-    seqsm : np.ndarray
-        Numpy array of sequences or dict of sequences.
-    uns : dict
-        Dict of additional/unstructured information.
-    rev_seqs : np.ndarray
-        Numpy array of reverse complement sequences.
-    seqsidx : Index1D
-        Index of sequences to use.
-    ohe_seqs : np.ndarray
-        Numpy array of one-hot encoded sequences.
-    ohe_rev_seqs : np.ndarray
-        Numpy array of one-hot encoded reverse complement sequences.
-    """
+    ds: xr.Dataset
+    path: Optional[Path]
+    max_jitter: Optional[int]
 
-    def __init__(
+    def __init__(self, ds: xr.Dataset) -> None:
+        self.ds = ds.copy()
+
+    def sel(
         self,
-        seqs: np.ndarray = None,
-        names: np.ndarray = None,
-        seqs_annot: Optional[Union[pd.DataFrame, Mapping[str, Iterable[Any]]]] = None,
-        pos_annot: Union[pr.PyRanges, Dict, str] = None,
-        seqsm: Optional[Union[np.ndarray, Mapping[str, Sequence[Any]]]] = None,
-        uns: Optional[Mapping[str, Any]] = None,
-        rev_seqs: np.ndarray = None,
-        ohe_seqs: np.ndarray = None,
-        ohe_rev_seqs: np.ndarray = None,
-        seqidx: Index1D = None,
-    ):  
-        # Set up the sequence index
-        if seqidx is not None and len(seqidx) > 0:
-            self.seqidx = seqidx
-        elif seqs is not None:
-            self.seqidx = range(seqs.shape[0])
-        elif ohe_seqs is not None:
-            self.seqidx = range(ohe_seqs.shape[0])
-        elif seqs_annot is not None:
-            self.seqidx = range(seqs_annot.shape[0])
-        else:
-            raise ValueError("No sequences or sequence metadata provided.")
-
-        # Sequence representations
-        self.seqs = np.array(seqs[self.seqidx]) if seqs is not None else None
-        self.names = np.array(names[self.seqidx]) if names is not None else None
-        self.rev_seqs = np.array(rev_seqs[self.seqidx]) if rev_seqs is not None else None
-        self.ohe_seqs = np.array(ohe_seqs[self.seqidx]) if ohe_seqs is not None else None
-        self.ohe_rev_seqs = np.array(ohe_rev_seqs[self.seqidx]) if ohe_rev_seqs is not None else None
-
-        # n_obs
-        if type(self.seqidx[0]) in [bool, np.bool_]:
-            self._n_obs = sum(self.seqidx)
-        else:
-            self._n_obs = len(self.seqidx)
-
-        # seq_annot (handled by gen dataframe)
-        if isinstance(self.seqidx, slice):
-            self.seqs_annot = _gen_dataframe(
-                seqs_annot, self._n_obs, ["obs_names", "row_names"]
-            )[self.seqidx]
-        elif type(self.seqidx[0]) in [bool, np.bool_]:
-            self.seqs_annot = _gen_dataframe(
-                seqs_annot, self._n_obs, ["obs_names", "row_names"]
-            ).loc[self.seqidx]
-        else:
-            self.seqs_annot = _gen_dataframe(
-                seqs_annot, self._n_obs, ["obs_names", "row_names"]
-            ).iloc[self.seqidx]
-
-        # pos_annot
-        if isinstance(pos_annot, dict):
-            self.pos_annot = pr.from_dict(pos_annot)
-        elif isinstance(pos_annot, str):
-            self.pos_annot = pr.read_bed(pos_annot)
-        else:
-            self.pos_annot = pos_annot
-
-        # uns
-        self.uns = uns or OrderedDict()
-
-        # seqsm TODO: Think about consequences of making obsm a group in hdf
-        if seqsm is not None:
-            seqsm = seqsm.copy()
-            for key in seqsm:
-                seqsm[key] = seqsm[key][self.seqidx]
-        self.seqsm = convert_to_dict(seqsm)
-            
-    @property
-    def seqs(self) -> np.ndarray:
-        """np.ndarray: Numpy array of string representation of sequences."""
-        return self._seqs
-
-    @seqs.setter
-    def seqs(self, seqs: np.ndarray):
-        self._seqs = seqs
-
-    @property
-    def names(self) -> np.ndarray:
-        """np.ndarray: Numpy array of names or identifiers of sequences."""
-        return self._names
-
-    @names.setter
-    def names(self, names: np.ndarray):
-        self._names = names
-
-    @property
-    def n_obs(self) -> int:
-        """int: Number of sequences contained in the object."""
-        return self._n_obs
-
-    @property
-    def rev_seqs(self) -> np.ndarray:
-        """np.ndarray: Numpy array of reverse complement sequences."""
-        return self._rev_seqs
-
-    @rev_seqs.setter
-    def rev_seqs(self, rev_seqs: np.ndarray):
-        self._rev_seqs = rev_seqs
-
-    @property
-    def ohe_seqs(self) -> np.ndarray:
-        """np.ndarray: Numpy array of one-hot encoded sequences."""
-        return self._ohe_seqs
-
-    @ohe_seqs.setter
-    def ohe_seqs(self, ohe_seqs: np.ndarray):
-        self._ohe_seqs = ohe_seqs
-
-    @property
-    def seqs_annot(self) -> pd.DataFrame:
-        """pd.DataFrame: Pandas dataframe of per sequence annotations."""
-        return self._seqs_annot
-
-    @seqs_annot.setter
-    def seqs_annot(self, seqs_annot: Union[pd.DataFrame, Mapping[str, Iterable[Any]]]):
-        self._seqs_annot = _gen_dataframe(
-            seqs_annot, self._n_obs, ["obs_names", "row_names"]
+        indexers: Optional[Mapping[Any, Any]] = None,
+        method: Optional[
+            Literal["nearest", "pad", "ffill", "backfill", "bfill"]
+        ] = None,
+        tolerance: Optional[Union[int, float, Iterable[Union[int, float]]]] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "SeqData":
+        return SeqData(
+            self.ds.sel(
+                indexers=indexers,
+                method=method,
+                tolerance=tolerance,
+                drop=drop,
+                **indexers_kwargs,
+            )
         )
 
-    @property
-    def pos_annot(self) -> pr.PyRanges:
-        """pr.PyRanges: PyRanges object of per sequence annotations.""" 
-        return self._pos_annot
-
-    @pos_annot.setter
-    def pos_annot(self, pos_annot: pr.PyRanges):
-        self._pos_annot = pos_annot
-
-    @property
-    def ohe_rev_seqs(self) -> np.ndarray:
-        """np.ndarray: Numpy array of one-hot encoded reverse complement sequences."""
-        return self._ohe_rev_seqs
-
-    @ohe_rev_seqs.setter
-    def ohe_rev_seqs(self, ohe_rev_seqs: np.ndarray):
-        self._ohe_rev_seqs = ohe_rev_seqs
+    def isel(
+        self,
+        indexers: Optional[Mapping[Any, Any]] = None,
+        drop: bool = False,
+        missing_dims: Literal["raise", "warn", "ignore"] = "raise",
+        **indexers_kwargs: Any,
+    ) -> "SeqData":
+        return SeqData(self.ds.isel(indexers, drop, missing_dims, **indexers_kwargs))
 
     @property
-    def seqsm(self) -> Mapping[str, Sequence[Any]]:
-        """Mapping[str, Sequence[Any]]: Dictionary of multidimensional sequence representations."""
-        return self._seqsm
-
-    @seqsm.setter
-    def seqsm(self, seqsm: Mapping[str, Sequence[Any]]):
-        self._seqsm = seqsm
+    def layers(self):
+        return _filter_layers(self.ds)
 
     @property
-    def uns(self) -> Mapping[str, Any]:
-        """Mapping[str, Any]: Dictionary of unstructured annotations."""
-        return self._uns
+    def obs(self):
+        return _filter_by_exact_dims(self.ds, "sequence")
 
-    @uns.setter
-    def uns(self, uns: Mapping[str, Any]):
-        self._uns = uns
+    @property
+    def var(self):
+        return _filter_by_exact_dims(self.ds, "length")
 
-    def __getitem__(self, index):
-        """Get item from data. Defines slicing of object."""
-        if isinstance(index, str):
-            return self.seqs_annot[index]
-        elif isinstance(index, slice):
-            index = np.arange(self.n_obs)[index]
-            return SeqData(
-                seqs=self.seqs,
-                names=self.names,
-                rev_seqs=self.rev_seqs,
-                seqs_annot=self.seqs_annot,
-                pos_annot=self.pos_annot,
-                ohe_seqs=self.ohe_seqs,
-                ohe_rev_seqs=self.ohe_rev_seqs,
-                seqsm=self.seqsm,
-                uns=self.uns,
-                seqidx=index,
+    @property
+    def obsm(self):
+        return _filter_obsm(self.ds)
+
+    @property
+    def varm(self):
+        return _filter_varm(self.ds)
+
+    @property
+    def obsp(self):
+        return _filter_by_exact_dims(self.ds, ("sequence", "sequence"))
+
+    @property
+    def varp(self):
+        return _filter_by_exact_dims(self.ds, ("length", "length"))
+
+    @property
+    def uns(self):
+        return _filter_uns(self.ds)
+
+    def __repr__(self) -> str:
+        msg = "SeqData holding an Xarray dataset.\n"
+        msg += repr(self.ds)
+        return msg
+
+    def _repr_html_(self) -> str:
+        msg = "SeqData holding an Xarray dataset.\n"
+        msg += self.ds._repr_html_()
+        return msg
+
+    def load(self, **kwargs):
+        """Load this SeqData into memory, if it isn't already."""
+        self.ds = self.ds.load(**kwargs)
+
+    def to_zarr(
+        self,
+        store: Optional[Union[MutableMapping, PathType]] = None,
+        chunk_store: Optional[Union[MutableMapping, PathType]] = None,
+        mode: Optional[Literal["w", "w-", "a", "r+"]] = None,
+        synchronizer=None,
+        group: Optional[str] = None,
+        encoding: Optional[Mapping] = None,
+        compute=True,
+        append_dim: Optional[Hashable] = None,
+        region: Optional[Mapping[str, slice]] = None,
+        safe_chunks=True,
+        storage_options: Optional[Dict[str, str]] = None,
+        zarr_version: Optional[int] = None,
+    ):
+        self.ds.to_zarr(
+            store=store,
+            chunk_store=chunk_store,
+            mode=mode,
+            synchronizer=synchronizer,
+            group=group,
+            encoding=encoding,
+            compute=compute,  # type: ignore
+            consolidated=True,
+            append_dim=append_dim,
+            region=region,
+            safe_chunks=safe_chunks,
+            storage_options=storage_options,
+            zarr_version=zarr_version,
+        )
+
+    @classmethod
+    def open_zarr(
+        cls,
+        store: PathType,
+        group: Optional[str] = None,
+        synchronizer=None,
+        chunks: Optional[
+            Union[Literal["auto"], int, Mapping[str, int], Tuple[int, ...]]
+        ] = "auto",
+        decode_cf=True,
+        mask_and_scale=True,
+        decode_times=True,
+        decode_coords=True,
+        drop_variables: Optional[Union[str, Iterable[str]]] = None,
+        consolidated: Optional[bool] = None,
+        overwrite_encoded_chunks=False,
+        chunk_store: Optional[Union[MutableMapping, PathType]] = None,
+        storage_options: Optional[Dict[str, str]] = None,
+        decode_timedelta: Optional[bool] = None,
+        use_cftime: Optional[bool] = None,
+        zarr_version: Optional[int] = None,
+        **kwargs,
+    ):
+        ds = xr.open_zarr(
+            store=store,
+            group=group,
+            synchronizer=synchronizer,
+            chunks=chunks,  # type: ignore
+            decode_cf=decode_cf,
+            mask_and_scale=mask_and_scale,
+            decode_times=decode_times,
+            concat_characters=False,
+            decode_coords=decode_coords,
+            drop_variables=drop_variables,
+            consolidated=consolidated,
+            overwrite_encoded_chunks=overwrite_encoded_chunks,
+            chunk_store=chunk_store,
+            storage_options=storage_options,
+            decode_timedelta=decode_timedelta,
+            use_cftime=use_cftime,
+            zarr_version=zarr_version,
+            **kwargs,
+        )
+        self = cls(ds)
+        self.path = Path(store)
+        self.max_jitter = cast(int, self.ds.attrs["max_jitter"])
+        return self
+
+    @classmethod
+    def from_files(
+        cls,
+        *readers: Union[FlatReader, RegionReader],
+        path: PathType,
+        length: Optional[int] = None,
+        bed: Optional[Union[PathType, pd.DataFrame]] = None,
+        max_jitter: int = 0,
+        overwrite=False,
+    ) -> Self:
+        z = zarr.open_group(path)
+        z.attrs["max_jitter"] = max_jitter
+
+        if bed is not None and length is not None:
+            length += 2 * max_jitter
+            if isinstance(bed, (str, Path)):
+                _bed = _read_bedlike(bed)
+            else:
+                _bed = bed
+            _set_uniform_length_around_center(_bed, length)
+            _df_to_xr_zarr(
+                _bed,
+                path,
+                ["sequence"],
+                compressor=Blosc("zstd", clevel=7, shuffle=-1),
+                overwrite=overwrite,
             )
+        elif bed is not None or length is not None:
+            raise ValueError("bed and length are mutually inclusive arguments.")
         else:
-            return SeqData(
-                seqs=self.seqs,
-                names=self.names,
-                rev_seqs=self.rev_seqs,
-                seqs_annot=self.seqs_annot,
-                pos_annot=self.pos_annot,
-                ohe_seqs=self.ohe_seqs,
-                ohe_rev_seqs=self.ohe_rev_seqs,
-                seqsm=self.seqsm,
-                uns=self.uns,
-                seqidx=index,
-            )
+            if any(map(lambda r: isinstance(r, RegionReader), readers)):
+                raise ValueError(
+                    "Got readers that need bed and length but didn't get bed and length."
+                )
 
-    def __setitem__(self, index, value):
-        """Add a column to seqs_annot."""
-        if isinstance(index, str):
-            self.seqs_annot[index] = value
-        else:
-            raise ValueError(
-                "SeqData only supports setting seq_annot columns with indexing."
-            )
+        for reader in readers:
+            if isinstance(reader, FlatReader):
+                reader._write(path, overwrite)
+            elif isinstance(reader, RegionReader):
+                reader._write(
+                    path,
+                    length,  # type: ignore
+                    _bed,  # type: ignore
+                    overwrite,
+                )
 
-    def __repr__(self):
-        """Representation of SeqData object."""
-        descr = f"SeqData object with = {self._n_obs} seqs"
-        for attr in [
-            "seqs",
-            "names",
-            "rev_seqs",
-            "ohe_seqs",
-            "ohe_rev_seqs",
-            "seqs_annot",
-            "pos_annot",
-            "seqsm",
-            "uns",
-        ]:
-            if attr in ["seqs", "names", "rev_seqs", "ohe_seqs", "ohe_rev_seqs"]:
-                if getattr(self, attr) is not None:
-                    descr += f"\n{attr} = {getattr(self, attr).shape}"
-                else:
-                    descr += f"\n{attr} = None"
-            elif attr in ["seqs_annot"]:
-                keys = getattr(self, attr).keys()
-                if len(keys) > 0:
-                    descr += f"\n{attr}: {str(list(keys))[1:-1]}"
-            elif attr in ["pos_annot"]:
-                if getattr(self, attr) is not None:
-                    descr += f"\n{attr}: PyRanges object with {len(getattr(self, attr))} features"
-                else:
-                    descr += f"\n{attr}: None"
-            elif attr in ["seqsm", "uns"]:
-                if len(getattr(self, attr)) > 0:
-                    descr += f"\n{attr}: {str(list(getattr(self, attr).keys()))[1:-1]}"
-                else:
-                    descr += f"\n{attr}: None"
-        return descr
+        zarr.consolidate_metadata(path)  # type: ignore
 
-    def copy(self):
-        """Return a copy of the SeqData object."""
-        return deepcopy(self)
+        self = cls.open_zarr(path)
+        return self
 
-    def write_h5sd(self, path: PathLike, mode: str = "w"):
-        """Write SeqData object to h5sd file.
+    def add_layers_from_files(
+        self,
+        *readers: Union[FlatReader, RegionReader],
+        overwrite=False,
+    ):
+        if self.path is None:
+            raise ValueError("SeqData must be backed on disk to add layers from files.")
+
+        if any(map(lambda r: isinstance(r, RegionReader), readers)):
+            length = self.ds.sizes["length"]
+            bed = self.ds[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
+
+        for reader in readers:
+            if isinstance(reader, FlatReader):
+                if (
+                    reader.n_seqs is not None
+                    and reader.n_seqs != self.ds.sizes["sequence"]
+                ):
+                    raise ValueError(
+                        f'Reader "{reader.name}" has a different number of sequences than this SeqData.'
+                    )
+                reader._write(self.path, overwrite)
+            elif isinstance(reader, RegionReader):
+                reader._write(
+                    self.path,
+                    length,  # type: ignore
+                    bed,  # type: ignore
+                    overwrite,
+                )
+
+        self = SeqData.open_zarr(self.path)
+        return self
+
+    def get_torch_dataloader(
+        self,
+        sample_dims: Union[str, List[str]],
+        variables: List[str],
+        transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+        batch_size: Optional[int] = 1,
+        shuffle: bool = False,
+        sampler: Optional[Union["Sampler", Iterable]] = None,
+        batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+        num_workers: int = 0,
+        pin_memory: bool = False,
+        drop_last: bool = False,
+        timeout: float = 0,
+        worker_init_fn=None,
+        multiprocessing_context=None,
+        generator=None,
+        *,
+        prefetch_factor: int = 2,
+        persistent_workers: bool = False,
+    ) -> "DataLoader":
+        """Get a PyTorch DataLoader for this SeqData.
 
         Parameters
         ----------
-        path: PathLike
-            Path to h5sd file. If file exists, it will be overwritten.
-        mode: str, optional
-            Mode to open h5sd file. Default is "w".
+        sample_dims : str or list[str]
+            Sample dimensions will be sliced/reduced over when fetching batches. For example,
+            if `sample_dims = ['sequence', 'sample']` for variable with dimensions `['sequence', 'length', 'sample']`
+            then a batch of data will have dimensions `['batch', 'length']`.
+        variables : list[str]
+            Which variables to sample from.
+        transforms : Dict[str, (ndarray) -> Tensor], optional
+            Transforms to apply to each variable. Defaults to transforming arrays to Tensor.
+
+        For other parameters, see documentation for [DataLoader](https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader)
+
+        Returns
+        -------
+        DataLoader
         """
-        from .._io.write import write_h5sd
+        if not TORCH_AVAILABLE:
+            raise ImportError("Install PyTorch to get DataLoader from SeqData.")
 
-        write_h5sd(self, path, mode)
+        if transforms is None:
+            _transforms: Dict[str, Callable[[NDArray], "torch.Tensor"]] = {}
+        else:
+            _transforms = transforms
 
-    def make_names_unique(self):
-        """Make sequence names unique by appending a number to the end of each name."""
-        n_digits = len(str(self.n_obs))
-        new_index = np.array(["seq{num:0{width}}".format(num=i, width=n_digits)for i in range(self.n_obs)])
-        self.names = new_index
-        self.seqs_annot["index"] = self.seqs_annot.index
-        self.seqs_annot.index = new_index
+        variables_not_in_ds = set(variables) - set(self.ds.data_vars.keys())
+        if variables_not_in_ds:
+            raise ValueError(
+                f"Got variables that are not in the SeqData: {variables_not_in_ds}"
+            )
+
+        transform_vars_not_in_vars = set(_transforms.keys()) - set(variables)
+        if transform_vars_not_in_vars:
+            raise ValueError(
+                f"Got transforms for variables that are not requested: {transform_vars_not_in_vars}"
+            )
+
+        transform_vars_not_in_ds = set(_transforms.keys()) - set(
+            self.ds.data_vars.keys()
+        )
+        if transform_vars_not_in_ds:
+            raise ValueError(
+                f"Got transforms for variables that are not in the SeqData: {transform_vars_not_in_ds}"
+            )
+
+        dim_sizes = [self.ds.dims[d] for d in sample_dims]
+        dataset = cartesian_product([np.arange(d) for d in dim_sizes])
+
+        def collate_fn(indices: List[NDArray]):
+            idx = np.vstack(indices)
+            selector = {
+                d: xr.DataArray(idx[:, i], dims="batch")
+                for i, d in enumerate(sample_dims)
+            }
+            out = {
+                k: arr.isel(selector, missing_dims="ignore").to_numpy()
+                for k, arr in self.ds[variables].data_vars.items()
+            }
+            out_tensors = {
+                k: _transforms.get(k, lambda x: torch.as_tensor(x))(arr)
+                for k, arr in out.items()
+            }
+            return out_tensors
+
+        return DataLoader(
+            dataset,  # type: ignore
+            batch_size=batch_size,
+            shuffle=shuffle,
+            sampler=sampler,
+            batch_sampler=batch_sampler,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+            pin_memory=pin_memory,
+            drop_last=drop_last,
+            timeout=timeout,
+            worker_init_fn=worker_init_fn,
+            multiprocessing_context=multiprocessing_context,
+            generator=generator,
+            prefetch_factor=prefetch_factor,
+            persistent_workers=persistent_workers,
+        )

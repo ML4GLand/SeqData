@@ -1,11 +1,12 @@
 """Annotated sequence data"""
 
-from ._core.seqdata import SeqData
-from ._core.merge import concat
+from ._core import SeqData, concat
 from ._io.read import (
-    read_csv,
-    read_fasta,
-    read_bed,
-    read_h5sd,
-    read
+    read_bam,
+    read_bigwig,
+    read_flat_fasta,
+    read_genome_fasta,
+    read_table,
+    read_vcf,
 )
+from ._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table

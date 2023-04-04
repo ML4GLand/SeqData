@@ -1,57 +1,65 @@
+from itertools import accumulate, chain, repeat
+from typing import Tuple, Union
+
 import numpy as np
-import pandas as pd
-from functools import singledispatch
-from pandas.api.types import is_string_dtype
-
-@singledispatch
-def _gen_dataframe(anno, length, index_names):
-    if anno is None or len(anno) == 0:
-        return pd.DataFrame(index=pd.RangeIndex(0, length, name=None).astype(str))
-    for index_name in index_names:
-        if index_name in anno:
-            return pd.DataFrame(
-                anno,
-                index=anno[index_name],
-                columns=[k for k in anno.keys() if k != index_name],
-            )
-    return pd.DataFrame(anno, index=pd.RangeIndex(0, length, name=None).astype(str))
+import xarray as xr
 
 
-@_gen_dataframe.register(pd.DataFrame)
-def _(anno, length, index_names):
-    anno = anno.copy(deep=False)
-    if not is_string_dtype(anno.index):
-        # warnings.warn("Transforming to str index.", ImplicitModificationWarning)
-        anno.index = anno.index.astype(str)
-    return anno
+def _filter_by_exact_dims(ds: xr.Dataset, dims: Union[str, Tuple[str, ...]]):
+    if isinstance(dims, str):
+        dims = (dims,)
+    else:
+        dims = tuple(dims)
+    selector = []
+    for name, arr in ds.data_vars.items():
+        if arr.dims == dims:
+            selector.append(name)
+    return ds[selector]
 
 
-@_gen_dataframe.register(pd.Series)
-@_gen_dataframe.register(pd.Index)
-def _(anno, length, index_names):
-    raise ValueError(f"Cannot convert {type(anno)} to DataFrame")
+def _filter_layers(ds: xr.Dataset):
+    selector = []
+    for name, arr in ds.data_vars.items():
+        if arr.dims[:2] == ("sequence", "length"):
+            selector.append(name)
+    return ds[selector]
 
 
-@singledispatch
-def convert_to_dict(obj) -> dict:
-    return dict(obj)
+def _filter_obsm(ds: xr.Dataset):
+    selector = []
+    for name, arr in ds.data_vars.items():
+        if len(arr.dims) > 1 and arr.dims[0] == "sequence" and "length" not in arr.dims:
+            selector.append(name)
+    return ds[selector]
 
 
-@convert_to_dict.register(dict)
-def convert_to_dict_dict(obj: dict):
-    return obj
+def _filter_varm(ds: xr.Dataset):
+    selector = []
+    for name, arr in ds.data_vars.items():
+        if len(arr.dims) > 1 and arr.dims[0] == "length" and "sequence" not in arr.dims:
+            selector.append(name)
+    return ds[selector]
 
 
-@convert_to_dict.register(np.ndarray)
-def convert_to_dict_ndarray(obj: np.ndarray):
-    if obj.dtype.fields is None:
-        raise TypeError(
-            "Can only convert np.ndarray with compound dtypes to dict, "
-            f"passed array had “{obj.dtype}”."
-        )
-    return {k: obj[k] for k in obj.dtype.fields.keys()}
+def _filter_uns(ds: xr.Dataset):
+    selector = []
+    for name, arr in ds.data_vars.items():
+        # All dimensions are not 'sequence' or 'length'
+        if np.isin(arr.dims, ["sequence", "length"], invert=True).all():  # type: ignore
+            selector.append(name)
+    return ds[selector]
 
 
-@convert_to_dict.register(type(None))
-def convert_to_dict_nonetype(obj: None):
-    return dict()
+def cartesian_product(arrays):
+    # https://stackoverflow.com/a/49445693
+    la = len(arrays)
+    L = *map(len, arrays), la
+    dtype = np.result_type(*arrays)
+    arr = np.empty(L, dtype=dtype)
+    arrs = (*accumulate(chain((arr,), repeat(0, la - 1)), np.ndarray.__getitem__),)
+    idx = slice(None), *repeat(None, la - 1)
+    for i in range(la - 1, 0, -1):
+        arrs[i][..., i] = arrays[i][idx[: la - i]]
+        arrs[i - 1][1:] = arrs[i]
+    arr[..., 0] = arrays[0][idx]
+    return arr.reshape(-1, la)
