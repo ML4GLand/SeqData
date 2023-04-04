@@ -1,6 +1,7 @@
+import warnings
 from pathlib import Path
 from textwrap import dedent
-from typing import Generic, List, Optional, Tuple, Type, Union, cast
+from typing import Generic, List, Optional, Set, Tuple, Type, Union, cast
 
 import cyvcf2
 import joblib
@@ -9,6 +10,7 @@ import pandas as pd
 import pyBigWig
 import pysam
 import zarr
+from natsort import natsorted
 from numcodecs import Blosc, Delta, blosc
 from numpy.typing import NDArray
 from tqdm import tqdm
@@ -17,6 +19,24 @@ from seqdata.alphabets import ALPHABETS, SequenceAlphabet
 from seqdata.types import DTYPE, FlatReader, PathType, RegionReader
 
 from .utils import _batch_io, _batch_io_bed, _df_to_xr_zarr
+
+### pysam and cyvcf2 implementation NOTE ###
+
+# pysam.FastaFile.fetch
+# contig not found => raises KeyError
+# if start < 0 => raises ValueError
+# if end > reference length => truncates interval
+
+# pysam.AlignmentFile.count_coverage
+# contig not found => raises KeyError
+# start < 0 => raises ValueError
+# end > reference length => truncates interval
+
+# cyvcf2.VCF
+# Contig not found => warning
+# start < 0 => warning
+# start = 0 (despite being 1-indexed) => nothing
+# end > contig length => treats end = contig length
 
 
 class Table(FlatReader):
@@ -387,12 +407,18 @@ class BAM(RegionReader, Generic[DTYPE]):
     def _reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
         for i, row in tqdm(bed.iterrows(), total=len(bed)):
             contig, start, end = row[:3]
-            a, c, g, t = f.count_coverage(contig, start, end, read_callback="all")
-            if (pad_len := len(a) - end + start) > 0:
-                raise NotImplementedError
-            yield cast(
-                NDArray[DTYPE], np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
+            a, c, g, t = f.count_coverage(
+                contig, max(start, 0), end, read_callback="all"
             )
+            coverage = np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
+            if (pad_len := end - start - len(coverage)) > 0:
+                pad_arr = np.zeros(pad_len, dtype=self.dtype)
+                pad_left = start < 0
+                if pad_left:
+                    coverage = np.concatenate([pad_arr, coverage])
+                else:
+                    coverage = np.concatenate([coverage, pad_arr])
+            yield cast(NDArray[DTYPE], coverage)
 
     def _write_row_to_batch(self, row: NDArray[DTYPE], out: NDArray[DTYPE]):
         row[:] = out
@@ -472,6 +498,11 @@ class BAM(RegionReader, Generic[DTYPE]):
 
 
 class VCF(RegionReader):
+    name: str
+    vcf: Path
+    fasta: Path
+    contigs: List[str]
+
     def __init__(
         self,
         name: str,
@@ -479,13 +510,13 @@ class VCF(RegionReader):
         fasta: PathType,
         samples: List[str],
         batch_size: int,
-        n_threads: int = 1,
-        samples_per_chunk: int = 10,
+        n_threads=1,
+        samples_per_chunk=10,
         alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     ) -> None:
         self.name = name
-        self.vcf = vcf
-        self.fasta = fasta
+        self.vcf = Path(vcf)
+        self.fasta = Path(fasta)
         self.samples = samples
         self.batch_size = batch_size
         self.n_threads = n_threads
@@ -496,6 +527,26 @@ class VCF(RegionReader):
             self.alphabet = ALPHABETS[alphabet]
         else:
             self.alphabet = alphabet
+
+        with pysam.FastaFile(str(fasta)) as f:
+            fasta_contigs = set(f.references)
+        _vcf = cyvcf2.VCF(str(vcf))
+        vcf_contigs = cast(Set[str], set(_vcf.seqlens))
+        _vcf.close()
+
+        self.contigs = natsorted(fasta_contigs & vcf_contigs)
+        if len(self.contigs) == 0:
+            raise RuntimeError("FASTA and VCF have no contigs in common.")
+        contigs_exclusive_to_fasta = natsorted(fasta_contigs - vcf_contigs)
+        contigs_exclusive_to_vcf = natsorted(vcf_contigs - fasta_contigs)
+        if contigs_exclusive_to_fasta:
+            warnings.warn(
+                f"FASTA has contigs not found in VCF: {contigs_exclusive_to_fasta}"
+            )
+        if contigs_exclusive_to_vcf:
+            warnings.warn(
+                f"VCF has contigs not found in FASTA: {contigs_exclusive_to_vcf}"
+            )
 
     def _get_pos_bases(self, v):
         # change to bytes and extract alleles
@@ -515,8 +566,8 @@ class VCF(RegionReader):
         for i, row in tqdm(bed.iterrows(), total=len(bed)):
             contig, start, end = row[:3]
             start = cast(int, start)
-            seq_bytes = f.fetch(contig, start, end).encode("ascii")
-            if (pad_len := len(seq_bytes) - end + start) > 0:
+            seq_bytes = f.fetch(contig, max(start, 0), end).encode("ascii")
+            if (pad_len := end - start - len(seq_bytes)) > 0:
                 pad_left = start < 0
                 if pad_left:
                     seq_bytes = b"N" * pad_len + seq_bytes
@@ -526,7 +577,7 @@ class VCF(RegionReader):
             # (length samples haplotypes)
             tiled_seq = np.tile(seq, (1, len(self.samples), 2))
 
-            region = f"{contig}:{start+1}-{end}"
+            region = f"{contig}:{max(start, 0)+1}-{end}"
             positions_ls, alleles_ls = zip(
                 *[self._get_pos_bases(v) for v in vcf(region) if v.is_snp]
             )

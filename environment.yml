@@ -6,6 +6,7 @@ channels:
 dependencies:
   - cyvcf2
   - dask
+  - natsort
   - pandas
   - pandera
   - pybigwig
