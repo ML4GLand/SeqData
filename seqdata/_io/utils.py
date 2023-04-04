@@ -6,6 +6,7 @@ import pandas as pd
 import pandera as pa
 import pandera.typing as pat
 import zarr
+from numcodecs import VLenUTF8
 from numpy.typing import NDArray
 
 from seqdata.alphabets import SequenceAlphabet
@@ -28,17 +29,17 @@ def _read_bedlike(path: PathType):
 
 class BEDSchema(pa.DataFrameModel):
     chrom: pat.Series[pa.Category]
-    chromStart: pat.Series[pa.Int]
-    chromEnd: pat.Series[pa.Int]
-    name: Optional[pat.Series[pa.String]]
-    score: Optional[pat.Series[pa.Float]]
+    chromStart: pat.Series[int]
+    chromEnd: pat.Series[int]
+    name: Optional[pat.Series[str]]
+    score: Optional[pat.Series[float]]
     strand: Optional[pat.Series[pa.Category]] = pa.Field(isin=["+", "-", "."])
-    thickStart: Optional[pat.Series[pa.Int]]
-    thickEnd: Optional[pat.Series[pa.Int]]
-    itemRgb: Optional[pat.Series]
+    thickStart: Optional[pat.Series[int]]
+    thickEnd: Optional[pat.Series[int]]
+    itemRgb: Optional[pat.Series[str]]
     blockCount: Optional[pat.Series[pa.UInt]]
-    blockSizes: Optional[pat.Series]
-    blockStarts: Optional[pat.Series]
+    blockSizes: Optional[pat.Series[str]]
+    blockStarts: Optional[pat.Series[str]]
 
     class Config:
         coerce = True
@@ -71,21 +72,23 @@ def _read_bed(bed_path: PathType):
         names=bed_cols[:n_cols],
         dtype={"chrom": str, "name": str},
     )
+    if "strand" not in bed:
+        bed["strand"] = "+"
     bed = BEDSchema.to_schema()(bed)
     return bed
 
 
 class NarrowPeakSchema(pa.DataFrameModel):
     chrom: pat.Series[pa.Category]
-    chromStart: pat.Series[pa.Int]
-    chromEnd: pat.Series[pa.Int]
-    name: pat.Series[pa.String]
-    score: pat.Series[pa.Float]
+    chromStart: pat.Series[int]
+    chromEnd: pat.Series[int]
+    name: pat.Series[str]
+    score: pat.Series[float]
     strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."])
-    signalValue: pat.Series
-    pValue: pat.Series
-    qValue: pat.Series
-    peak: pat.Series[pa.Int]
+    signalValue: pat.Series[float]
+    pValue: pat.Series[float]
+    qValue: pat.Series[float]
+    peak: pat.Series[int]
 
     class Config:
         coerce = True
@@ -117,14 +120,14 @@ def _read_narrowpeak(narrowpeak_path: PathType) -> pd.DataFrame:
 
 class BroadPeakSchema(pa.DataFrameModel):
     chrom: pat.Series[pa.Category]
-    chromStart: pat.Series[pa.Int]
-    chromEnd: pat.Series[pa.Int]
-    name: pat.Series[pa.String]
-    score: pat.Series[pa.Float]
+    chromStart: pat.Series[int]
+    chromEnd: pat.Series[int]
+    name: pat.Series[str]
+    score: pat.Series[float]
     strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."])
-    signalValue: pat.Series
-    pValue: pat.Series
-    qValue: pat.Series
+    signalValue: pat.Series[float]
+    pValue: pat.Series[float]
+    qValue: pat.Series[float]
 
     class Config:
         coerce = True
@@ -165,7 +168,12 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
 def _df_to_xr_zarr(df: pd.DataFrame, seqdata_path: PathType, dims: List[str], **kwargs):
     z = zarr.open_group(seqdata_path)
     for name, series in df.items():
-        arr = z.array(name, series.to_numpy(), **kwargs)
+        data = series.to_numpy()
+        if data.dtype.type == np.object_:
+            object_codec = VLenUTF8()
+        else:
+            object_codec = None
+        arr = z.array(name, data, object_codec=object_codec, **kwargs)
         arr.attrs["_ARRAY_DIMENSIONS"] = dims
 
 

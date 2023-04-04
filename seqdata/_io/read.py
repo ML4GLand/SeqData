@@ -194,6 +194,12 @@ class GenomeFASTA(RegionReader):
         for i, row in tqdm(bed.iterrows()):
             contig, start, end = row[:3]
             seq = f.fetch(contig, start, end).encode("ascii")
+            if (pad_len := len(seq) - end + start) > 0:
+                pad_left = start < 0
+                if pad_left:
+                    seq = b"N" * pad_len + seq
+                else:
+                    seq += b"N" * pad_len
             out = cast(NDArray[np.bytes_], np.frombuffer(seq, "|S1"))
             yield out
 
@@ -380,6 +386,8 @@ class BAM(RegionReader, Generic[DTYPE]):
         for i, row in tqdm(bed.iterrows(), total=len(bed)):
             contig, start, end = row[:3]
             a, c, g, t = f.count_coverage(contig, start, end, read_callback="all")
+            if (pad_len := len(a) - end + start) > 0:
+                raise NotImplementedError
             yield cast(
                 NDArray[DTYPE], np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
             )
@@ -506,6 +514,12 @@ class VCF(RegionReader):
             contig, start, end = row[:3]
             start = cast(int, start)
             seq_bytes = f.fetch(contig, start, end).encode("ascii")
+            if (pad_len := len(seq_bytes) - end + start) > 0:
+                pad_left = start < 0
+                if pad_left:
+                    seq_bytes = b"N" * pad_len + seq_bytes
+                else:
+                    seq_bytes += b"N" * pad_len
             seq = cast(NDArray[np.bytes_], np.frombuffer(seq_bytes, "|S1"))
             # (length samples haplotypes)
             tiled_seq = np.tile(seq, (1, len(self.samples), 2))

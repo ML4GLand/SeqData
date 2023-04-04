@@ -1,5 +1,20 @@
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Hashable,
+    Iterable,
+    List,
+    Literal,
+    Mapping,
+    MutableMapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+    cast,
+)
 
 import numpy as np
 import pandas as pd
@@ -35,17 +50,41 @@ except ImportError:
 
 
 class SeqData:
+    ds: xr.Dataset
     path: Optional[Path]
     max_jitter: Optional[int]
 
     def __init__(self, ds: xr.Dataset) -> None:
         self.ds = ds.copy()
 
-    def sel(self, **kwargs):
-        return SeqData(self.ds.sel(**kwargs))
+    def sel(
+        self,
+        indexers: Optional[Mapping[Any, Any]] = None,
+        method: Optional[
+            Literal["nearest", "pad", "ffill", "backfill", "bfill"]
+        ] = None,
+        tolerance: Optional[Union[int, float, Iterable[Union[int, float]]]] = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> "SeqData":
+        return SeqData(
+            self.ds.sel(
+                indexers=indexers,
+                method=method,
+                tolerance=tolerance,
+                drop=drop,
+                **indexers_kwargs,
+            )
+        )
 
-    def isel(self, **kwargs):
-        return SeqData(self.ds.isel(**kwargs))
+    def isel(
+        self,
+        indexers: Optional[Mapping[Any, Any]] = None,
+        drop: bool = False,
+        missing_dims: Literal["raise", "warn", "ignore"] = "raise",
+        **indexers_kwargs: Any,
+    ) -> "SeqData":
+        return SeqData(self.ds.isel(indexers, drop, missing_dims, **indexers_kwargs))
 
     @property
     def layers(self):
@@ -95,18 +134,18 @@ class SeqData:
 
     def to_zarr(
         self,
-        store=None,
-        chunk_store=None,
-        mode=None,
+        store: Optional[Union[MutableMapping, PathType]] = None,
+        chunk_store: Optional[Union[MutableMapping, PathType]] = None,
+        mode: Optional[Literal["w", "w-", "a", "r+"]] = None,
         synchronizer=None,
-        group=None,
-        encoding=None,
+        group: Optional[str] = None,
+        encoding: Optional[Mapping] = None,
         compute=True,
-        append_dim=None,
-        region=None,
+        append_dim: Optional[Hashable] = None,
+        region: Optional[Mapping[str, slice]] = None,
         safe_chunks=True,
-        storage_options=None,
-        zarr_version=None,
+        storage_options: Optional[Dict[str, str]] = None,
+        zarr_version: Optional[int] = None,
     ):
         self.ds.to_zarr(
             store=store,
@@ -127,29 +166,31 @@ class SeqData:
     @classmethod
     def open_zarr(
         cls,
-        store,
-        group=None,
+        store: PathType,
+        group: Optional[str] = None,
         synchronizer=None,
-        chunks="auto",
+        chunks: Optional[
+            Union[Literal["auto"], int, Mapping[str, int], Tuple[int, ...]]
+        ] = "auto",
         decode_cf=True,
         mask_and_scale=True,
         decode_times=True,
         decode_coords=True,
-        drop_variables=None,
-        consolidated=None,
+        drop_variables: Optional[Union[str, Iterable[str]]] = None,
+        consolidated: Optional[bool] = None,
         overwrite_encoded_chunks=False,
-        chunk_store=None,
-        storage_options=None,
-        decode_timedelta=None,
-        use_cftime=None,
-        zarr_version=None,
+        chunk_store: Optional[Union[MutableMapping, PathType]] = None,
+        storage_options: Optional[Dict[str, str]] = None,
+        decode_timedelta: Optional[bool] = None,
+        use_cftime: Optional[bool] = None,
+        zarr_version: Optional[int] = None,
         **kwargs,
     ):
         ds = xr.open_zarr(
             store=store,
             group=group,
             synchronizer=synchronizer,
-            chunks=chunks,
+            chunks=chunks,  # type: ignore
             decode_cf=decode_cf,
             mask_and_scale=mask_and_scale,
             decode_times=decode_times,
@@ -167,7 +208,7 @@ class SeqData:
         )
         self = cls(ds)
         self.path = Path(store)
-        self.max_jitter = self.ds.attrs["max_jitter"]
+        self.max_jitter = cast(int, self.ds.attrs["max_jitter"])
         return self
 
     @classmethod
@@ -177,11 +218,9 @@ class SeqData:
         path: PathType,
         length: Optional[int] = None,
         bed: Optional[Union[PathType, pd.DataFrame]] = None,
-        max_jitter: Optional[int] = None,
+        max_jitter: int = 0,
         overwrite=False,
     ) -> Self:
-        max_jitter = 0 if max_jitter is None else max_jitter
-
         z = zarr.open_group(path)
         z.attrs["max_jitter"] = max_jitter
 

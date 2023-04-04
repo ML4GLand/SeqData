@@ -2,8 +2,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, TypeVar, Union
 
+import numpy as np
+
 if TYPE_CHECKING:
-    import numpy as np
     import pandas as pd
 
 PathType = Union[str, Path]
@@ -25,6 +26,6 @@ class RegionReader(ABC):
 
     @abstractmethod
     def _write(
-        self, out: PathType, length: int, bed: pd.DataFrame, overwrite=False
+        self, out: PathType, length: int, bed: "pd.DataFrame", overwrite=False
     ) -> None:
         ...
