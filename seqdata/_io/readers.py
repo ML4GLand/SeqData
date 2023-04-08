@@ -68,13 +68,14 @@ class Table(FlatReader):
     ):
         seqs = batch[[self.seq_col]].to_numpy().astype("S").view("|S1")
         obs = batch.drop(columns=self.seq_col)
-        z.array(
+        arr = z.array(
             self.seq_col,
             data=seqs,
             chunks=(self.batch_size, None),
             compressor=compressor,
             overwrite=overwrite,
         )
+        arr.attrs["_ARRAY_DIMENSIONS"] = ["sequence", "length"]
         _df_to_xr_zarr(
             obs,
             z,
