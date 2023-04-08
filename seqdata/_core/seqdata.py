@@ -233,7 +233,7 @@ class SeqData:
             _set_uniform_length_around_center(_bed, length)
             _df_to_xr_zarr(
                 _bed,
-                path,
+                z,
                 ["sequence"],
                 compressor=Blosc("zstd", clevel=7, shuffle=-1),
                 overwrite=overwrite,

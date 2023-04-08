@@ -165,15 +165,14 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
     bed["chromEnd"] = bed["chromStart"] + length
 
 
-def _df_to_xr_zarr(df: pd.DataFrame, seqdata_path: PathType, dims: List[str], **kwargs):
-    z = zarr.open_group(seqdata_path)
+def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dims: List[str], **kwargs):
     for name, series in df.items():
         data = series.to_numpy()
         if data.dtype.type == np.object_:
             object_codec = VLenUTF8()
         else:
             object_codec = None
-        arr = z.array(name, data, object_codec=object_codec, **kwargs)
+        arr = root.array(name, data, object_codec=object_codec, **kwargs)
         arr.attrs["_ARRAY_DIMENSIONS"] = dims
 
 

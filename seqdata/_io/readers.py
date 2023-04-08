@@ -77,7 +77,7 @@ class Table(FlatReader):
         )
         _df_to_xr_zarr(
             obs,
-            z.path,
+            z,
             ["sequence"],
             chunks=self.batch_size,
             compressor=compressor,
