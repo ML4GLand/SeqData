@@ -1,6 +1,6 @@
 """Annotated sequence data"""
 
-from ._core import SeqData, concat
+from ._core import SeqData, concat, open_zarr
 from ._io.read import (
     read_bam,
     read_bigwig,

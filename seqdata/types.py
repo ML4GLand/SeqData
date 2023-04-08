@@ -26,6 +26,10 @@ class RegionReader(ABC):
 
     @abstractmethod
     def _write(
-        self, out: PathType, length: int, bed: "pd.DataFrame", overwrite=False
+        self,
+        out: PathType,
+        bed: "pd.DataFrame",
+        length: Optional[int] = None,
+        overwrite=False,
     ) -> None:
         ...

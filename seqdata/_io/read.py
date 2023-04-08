@@ -17,7 +17,9 @@ def read_table(
     overwrite=False,
 ) -> SeqData:
     sdata = SeqData.from_files(
-        Table(name, tables, seq_col, batch_size), path=out, overwrite=overwrite
+        Table(name=name, tables=tables, seq_col=seq_col, batch_size=batch_size),
+        path=out,
+        overwrite=overwrite,
     )
     return sdata
 
@@ -31,7 +33,9 @@ def read_flat_fasta(
     overwrite=False,
 ) -> SeqData:
     sdata = SeqData.from_files(
-        FlatFASTA(name, fasta, batch_size, n_threads), path=out, overwrite=overwrite
+        FlatFASTA(name=name, fasta=fasta, batch_size=batch_size, n_threads=n_threads),
+        path=out,
+        overwrite=overwrite,
     )
     return sdata
 
@@ -49,7 +53,13 @@ def read_genome_fasta(
     overwrite=False,
 ) -> SeqData:
     sdata = SeqData.from_files(
-        GenomeFASTA(name, fasta, batch_size, n_threads, alphabet),
+        GenomeFASTA(
+            name=name,
+            fasta=fasta,
+            batch_size=batch_size,
+            n_threads=n_threads,
+            alphabet=alphabet,
+        ),
         path=out,
         length=length,
         bed=bed,
@@ -76,14 +86,14 @@ def read_bam(
 ) -> SeqData:
     sdata = SeqData.from_files(
         BAM(
-            name,
-            bams,
-            samples,
-            batch_size,
-            n_jobs,
-            threads_per_job,
-            samples_per_chunk,
-            dtype,
+            name=name,
+            bams=bams,
+            samples=samples,
+            batch_size=batch_size,
+            n_jobs=n_jobs,
+            threads_per_job=threads_per_job,
+            samples_per_chunk=samples_per_chunk,
+            dtype=dtype,
         ),
         path=out,
         length=length,
@@ -97,7 +107,7 @@ def read_bam(
 def read_bigwig(
     name: str,
     out: PathType,
-    bams: List[PathType],
+    bigwigs: List[PathType],
     samples: List[str],
     length: int,
     bed: PathType,
@@ -111,14 +121,14 @@ def read_bigwig(
 ) -> SeqData:
     sdata = SeqData.from_files(
         BigWig(
-            name,
-            bams,
-            samples,
-            batch_size,
-            n_jobs,
-            threads_per_job,
-            samples_per_chunk,
-            dtype,
+            name=name,
+            bigwigs=bigwigs,
+            samples=samples,
+            batch_size=batch_size,
+            n_jobs=n_jobs,
+            threads_per_job=threads_per_job,
+            samples_per_chunk=samples_per_chunk,
+            dtype=dtype,
         ),
         path=out,
         length=length,
@@ -146,14 +156,14 @@ def read_vcf(
 ) -> SeqData:
     sdata = SeqData.from_files(
         VCF(
-            name,
-            vcf,
-            fasta,
-            samples,
-            batch_size,
-            n_threads,
-            samples_per_chunk,
-            alphabet,
+            name=name,
+            vcf=vcf,
+            fasta=fasta,
+            samples=samples,
+            batch_size=batch_size,
+            n_threads=n_threads,
+            samples_per_chunk=samples_per_chunk,
+            alphabet=alphabet,
         ),
         path=out,
         length=length,

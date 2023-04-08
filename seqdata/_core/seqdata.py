@@ -24,21 +24,15 @@ from numcodecs import Blosc
 from numpy.typing import NDArray
 from typing_extensions import Self
 
-from seqdata._io.utils import (
-    _df_to_xr_zarr,
+from seqdata._io.bed_ops import (
+    _expand_regions,
     _read_bedlike,
     _set_uniform_length_around_center,
 )
+from seqdata._io.utils import _df_to_xr_zarr
 from seqdata.types import FlatReader, PathType, RegionReader
 
-from .utils import (
-    _filter_by_exact_dims,
-    _filter_layers,
-    _filter_obsm,
-    _filter_uns,
-    _filter_varm,
-    cartesian_product,
-)
+from .utils import _cartesian_product, _filter_by_exact_dims, _filter_obsm, _filter_uns
 
 try:
     import torch
@@ -87,32 +81,16 @@ class SeqData:
         return SeqData(self.ds.isel(indexers, drop, missing_dims, **indexers_kwargs))
 
     @property
-    def layers(self):
-        return _filter_layers(self.ds)
-
-    @property
     def obs(self):
-        return _filter_by_exact_dims(self.ds, "sequence")
-
-    @property
-    def var(self):
-        return _filter_by_exact_dims(self.ds, "length")
+        return _filter_by_exact_dims(self.ds, "_sequence")
 
     @property
     def obsm(self):
         return _filter_obsm(self.ds)
 
     @property
-    def varm(self):
-        return _filter_varm(self.ds)
-
-    @property
     def obsp(self):
-        return _filter_by_exact_dims(self.ds, ("sequence", "sequence"))
-
-    @property
-    def varp(self):
-        return _filter_by_exact_dims(self.ds, ("length", "length"))
+        return _filter_by_exact_dims(self.ds, ("_sequence", "_sequence"))
 
     @property
     def uns(self):
@@ -175,6 +153,7 @@ class SeqData:
         decode_cf=True,
         mask_and_scale=True,
         decode_times=True,
+        concat_characters=True,
         decode_coords=True,
         drop_variables: Optional[Union[str, Iterable[str]]] = None,
         consolidated: Optional[bool] = None,
@@ -194,7 +173,7 @@ class SeqData:
             decode_cf=decode_cf,
             mask_and_scale=mask_and_scale,
             decode_times=decode_times,
-            concat_characters=False,
+            concat_characters=concat_characters,
             decode_coords=decode_coords,
             drop_variables=drop_variables,
             consolidated=consolidated,
@@ -221,40 +200,45 @@ class SeqData:
         max_jitter: int = 0,
         overwrite=False,
     ) -> Self:
-        z = zarr.open_group(path)
-        z.attrs["max_jitter"] = max_jitter
+        root = zarr.open_group(path)
+        root.attrs["max_jitter"] = max_jitter
 
-        if bed is not None and length is not None:
-            length += 2 * max_jitter
+        if bed is not None:
             if isinstance(bed, (str, Path)):
                 _bed = _read_bedlike(bed)
             else:
                 _bed = bed
-            _set_uniform_length_around_center(_bed, length)
+
+            if length is not None:
+                length += 2 * max_jitter
+                _set_uniform_length_around_center(_bed, length)
+            elif length is None:
+                _expand_regions(_bed, max_jitter)
+
             _df_to_xr_zarr(
                 _bed,
-                path,
-                ["sequence"],
+                root,
+                ["_sequence"],
                 compressor=Blosc("zstd", clevel=7, shuffle=-1),
                 overwrite=overwrite,
             )
-        elif bed is not None or length is not None:
-            raise ValueError("bed and length are mutually inclusive arguments.")
+        elif (length is not None or max_jitter is None) and bed is None:
+            raise ValueError("Need a BED file when specifying a length.")
         else:
             if any(map(lambda r: isinstance(r, RegionReader), readers)):
                 raise ValueError(
-                    "Got readers that need bed and length but didn't get bed and length."
+                    "Got readers that need a BED file, but didn't get a BED file."
                 )
 
         for reader in readers:
             if isinstance(reader, FlatReader):
-                reader._write(path, overwrite)
+                reader._write(out=path, overwrite=overwrite)
             elif isinstance(reader, RegionReader):
                 reader._write(
-                    path,
-                    length,  # type: ignore
-                    _bed,  # type: ignore
-                    overwrite,
+                    out=path,
+                    bed=_bed,  # type: ignore
+                    length=length,  # type: ignore
+                    overwrite=overwrite,
                 )
 
         zarr.consolidate_metadata(path)  # type: ignore
@@ -271,25 +255,23 @@ class SeqData:
             raise ValueError("SeqData must be backed on disk to add layers from files.")
 
         if any(map(lambda r: isinstance(r, RegionReader), readers)):
-            length = self.ds.sizes["length"]
             bed = self.ds[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
 
         for reader in readers:
             if isinstance(reader, FlatReader):
                 if (
                     reader.n_seqs is not None
-                    and reader.n_seqs != self.ds.sizes["sequence"]
+                    and reader.n_seqs != self.ds.sizes["_sequence"]
                 ):
                     raise ValueError(
                         f'Reader "{reader.name}" has a different number of sequences than this SeqData.'
                     )
-                reader._write(self.path, overwrite)
+                reader._write(out=self.path, overwrite=overwrite)
             elif isinstance(reader, RegionReader):
                 reader._write(
-                    self.path,
-                    length,  # type: ignore
-                    bed,  # type: ignore
-                    overwrite,
+                    out=self.path,
+                    bed=bed,  # type: ignore
+                    overwrite=overwrite,
                 )
 
         self = SeqData.open_zarr(self.path)
@@ -300,6 +282,7 @@ class SeqData:
         sample_dims: Union[str, List[str]],
         variables: List[str],
         transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+        *,
         batch_size: Optional[int] = 1,
         shuffle: bool = False,
         sampler: Optional[Union["Sampler", Iterable]] = None,
@@ -311,17 +294,16 @@ class SeqData:
         worker_init_fn=None,
         multiprocessing_context=None,
         generator=None,
-        *,
         prefetch_factor: int = 2,
         persistent_workers: bool = False,
-    ) -> "DataLoader":
+    ) -> "DataLoader[Dict[str, Any]]":
         """Get a PyTorch DataLoader for this SeqData.
 
         Parameters
         ----------
         sample_dims : str or list[str]
-            Sample dimensions will be sliced/reduced over when fetching batches. For example,
-            if `sample_dims = ['sequence', 'sample']` for variable with dimensions `['sequence', 'length', 'sample']`
+            Sample dimensions that will be indexed over when fetching batches. For example,
+            if `sample_dims = ['_sequence', 'sample']` for a variable with dimensions `['_sequence', 'length', 'sample']`
             then a batch of data will have dimensions `['batch', 'length']`.
         variables : list[str]
             Which variables to sample from.
@@ -332,21 +314,21 @@ class SeqData:
 
         Returns
         -------
-        DataLoader
+        DataLoader that returns dictionaries of tensors.
         """
         if not TORCH_AVAILABLE:
             raise ImportError("Install PyTorch to get DataLoader from SeqData.")
-
-        if transforms is None:
-            _transforms: Dict[str, Callable[[NDArray], "torch.Tensor"]] = {}
-        else:
-            _transforms = transforms
 
         variables_not_in_ds = set(variables) - set(self.ds.data_vars.keys())
         if variables_not_in_ds:
             raise ValueError(
                 f"Got variables that are not in the SeqData: {variables_not_in_ds}"
             )
+
+        if transforms is None:
+            _transforms: Dict[str, Callable[[NDArray], "torch.Tensor"]] = {}
+        else:
+            _transforms = transforms
 
         transform_vars_not_in_vars = set(_transforms.keys()) - set(variables)
         if transform_vars_not_in_vars:
@@ -362,8 +344,11 @@ class SeqData:
                 f"Got transforms for variables that are not in the SeqData: {transform_vars_not_in_ds}"
             )
 
+        if isinstance(sample_dims, str):
+            sample_dims = [sample_dims]
+
         dim_sizes = [self.ds.dims[d] for d in sample_dims]
-        dataset = cartesian_product([np.arange(d) for d in dim_sizes])
+        dataset = _cartesian_product([np.arange(d) for d in dim_sizes])
 
         def collate_fn(indices: List[NDArray]):
             idx = np.vstack(indices)
