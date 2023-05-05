@@ -20,7 +20,7 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
 
 def _expand_regions(bed: pd.DataFrame, expansion_length: int):
     bed["chromStart"] = bed["chromStart"] - expansion_length
-    bed["chromEnd"] = bed["chromStart"] + expansion_length
+    bed["chromEnd"] = bed["chromEnd"] + expansion_length
 
 
 def _read_bedlike(path: PathType):

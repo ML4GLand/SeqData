@@ -10,6 +10,7 @@ import pandas as pd
 import pyBigWig
 import pysam
 import zarr
+from more_itertools import split_when
 from natsort import natsorted
 from numcodecs import Blosc, Delta, VLenArray, VLenBytes, blosc
 from numpy.typing import NDArray
@@ -18,7 +19,7 @@ from tqdm import tqdm
 from seqdata.alphabets import ALPHABETS, SequenceAlphabet
 from seqdata.types import DTYPE, FlatReader, PathType, RegionReader
 
-from .utils import _batch_io, _batch_io_bed, _df_to_xr_zarr
+from .utils import _df_to_xr_zarr, _get_row_batcher
 
 ### pysam and cyvcf2 implementation NOTE ###
 
@@ -85,11 +86,11 @@ class Table(FlatReader):
             compressor=compressor,
             overwrite=overwrite,
         )
-        first_cols = obs.columns
+        first_cols = obs.columns.to_list()
         return first_cols
 
     def _write_batch(
-        self, batch: pd.DataFrame, root: zarr.Group, first_cols, table: Path
+        self, batch: pd.DataFrame, root: zarr.Group, first_cols: List, table: Path
     ):
         seqs = batch[self.seq_col].str.encode("ascii").to_numpy()
         obs = batch.drop(columns=self.seq_col)
@@ -112,6 +113,7 @@ class Table(FlatReader):
     def _write(self, out: PathType, overwrite=False) -> None:
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
         z = zarr.open_group(out)
+
         first_batch = True
         for table in self.tables:
             with self._get_reader(table) as reader:
@@ -133,6 +135,8 @@ class FlatFASTA(FlatReader):
         fasta: PathType,
         batch_size: int,
         n_threads: int = 1,
+        fixed_length: bool = False,
+        length_dim: Optional[str] = None,
     ) -> None:
         self.name = name
         self.fasta = fasta
@@ -140,21 +144,65 @@ class FlatFASTA(FlatReader):
         self.n_threads = n_threads
         with pysam.FastaFile(str(self.fasta)) as f:
             self.n_seqs = len(f.references)
+        self.fixed_length = fixed_length
+        self.length_dim = length_dim
 
     def _reader(self, f: pysam.FastaFile):
-        for seq_name in tqdm(f.references, total=len(f.references)):
+        for seq_name in f.references:
             seq = f.fetch(seq_name).encode("ascii")
-            yield np.array([seq])
+            yield seq
 
-    def _write_row_to_batch(self, row: NDArray[np.object_], out: NDArray[np.object_]):
-        row[:] = out[0]
+    def _write_fixed_length(self, out: PathType, overwrite=False):
+        blosc.set_nthreads(self.n_threads)
+        compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-    def _write_batch_to_sink(
-        self, sink: zarr.Array, batch: NDArray[np.object_], start_idx: int
-    ):
-        sink[start_idx : start_idx + len(batch)] = batch
+        z = zarr.open_group(out)
+        with pysam.FastaFile(str(self.fasta)) as f:
+            seq_names = f.references
+            self.length = f.get_reference_length(seq_names[0])
 
-    def _write(self, out: PathType, overwrite=False) -> None:
+            arr = z.array(
+                f"{self.name}_id",
+                data=np.array(list(seq_names), object),
+                overwrite=overwrite,
+            )
+            arr.attrs["_ARRAY_DIMENSIONS"] = ["_sequence"]
+
+            n_seqs = len(seq_names)
+            batch_size = min(n_seqs, self.batch_size)
+
+            seqs = z.empty(
+                self.name,
+                shape=(n_seqs, self.length),
+                dtype=f"|S{self.length}",
+                chunks=batch_size,
+                overwrite=overwrite,
+                compressor=compressor,
+            )
+            length_dim = (
+                f"{self.name}_length" if self.length_dim is None else self.length_dim
+            )
+            seqs.attrs["_ARRAY_DIMENSIONS"] = ["_sequence", length_dim]
+
+            batch = np.empty(batch_size, dtype=object)
+
+            row_batcher = _get_row_batcher(self._reader(f), batch_size)
+            for last_row, last_in_batch, seq, batch_idx, start_idx in tqdm(
+                row_batcher, total=n_seqs
+            ):
+                if len(seq) != self.length:
+                    raise RuntimeError(
+                        """
+                        Fixed length FlatFASTA reader got sequences with different
+                        lengths.
+                        """
+                    )
+                seq = np.frombuffer(seq, f"|S{self.length}")
+                batch[batch_idx] = seq
+                if last_in_batch or last_row:
+                    seqs[start_idx : start_idx + batch_idx + 1] = batch[: batch_idx + 1]
+
+    def _write_variable_length(self, out: PathType, overwrite=False):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
@@ -182,15 +230,23 @@ class FlatFASTA(FlatReader):
                 object_codec=VLenBytes(),
             )
             seqs.attrs["_ARRAY_DIMENSIONS"] = ["_sequence"]
+
             batch = np.empty(batch_size, dtype=object)
 
-            _batch_io(
-                seqs,
-                batch,
-                self._reader(f),
-                self._write_row_to_batch,
-                self._write_batch_to_sink,
-            )
+            row_batcher = _get_row_batcher(self._reader(f), batch_size)
+            for last_row, last_in_batch, seq, batch_idx, start_idx in tqdm(
+                row_batcher, total=n_seqs
+            ):
+                batch[batch_idx] = seq
+                if last_in_batch or last_row:
+                    seqs[start_idx : start_idx + batch_idx + 1] = batch[: batch_idx + 1]
+
+    # mock single dispatch on class state
+    def _write(self, out: PathType, overwrite=False) -> None:
+        if self.fixed_length:
+            self._write_fixed_length(out=out, overwrite=overwrite)
+        else:
+            self._write_variable_length(out=out, overwrite=overwrite)
 
 
 class GenomeFASTA(RegionReader):
@@ -201,6 +257,7 @@ class GenomeFASTA(RegionReader):
         batch_size: int,
         n_threads: int = 1,
         alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+        length_dim: Optional[str] = None,
     ) -> None:
         self.name = name
         self.fasta = fasta
@@ -212,6 +269,39 @@ class GenomeFASTA(RegionReader):
             self.alphabet = ALPHABETS[alphabet]
         else:
             self.alphabet = alphabet
+        self.length_dim = f"{self.name}_length" if length_dim is None else length_dim
+
+    def _reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
+        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
+            contig, start, end = cast(Tuple[str, int, int], row[:3])
+            seq = f.fetch(contig, start, end).encode("ascii")
+            if (pad_len := end - start - len(seq)) > 0:
+                pad_left = start < 0
+                if pad_left:
+                    seq = (b"N" * pad_len) + seq
+                else:
+                    seq += b"N" * pad_len
+            yield seq
+
+    def _spliced_reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
+        pbar = tqdm(total=len(bed))
+        for rows in split_when(
+            bed.itertuples(index=False), lambda x, y: x.name != y.name
+        ):
+            unspliced: List[bytes] = []
+            for row in rows:
+                pbar.update()
+                contig, start, end = cast(Tuple[str, int, int], row[:3])
+                seq = f.fetch(contig, start, end).encode("ascii")
+                if (pad_len := end - start - len(seq)) > 0:
+                    pad_left = start < 0
+                    if pad_left:
+                        seq = (b"N" * pad_len) + seq
+                    else:
+                        seq += b"N" * pad_len
+                unspliced.append(seq)
+            spliced = b"".join(unspliced)
+            yield spliced
 
     def _write(
         self,
@@ -219,7 +309,25 @@ class GenomeFASTA(RegionReader):
         bed: pd.DataFrame,
         length: Optional[int] = None,
         overwrite=False,
+        splice=False,
     ) -> None:
+        if length is None:
+            self._write_variable_length(
+                out=out, bed=bed, overwrite=overwrite, splice=splice
+            )
+        else:
+            self._write_fixed_length(
+                out=out, bed=bed, length=length, overwrite=overwrite, splice=splice
+            )
+
+    def _write_fixed_length(
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        length: int,
+        overwrite: bool,
+        splice: bool,
+    ):
         blosc.set_nthreads(self.n_threads)
         compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
 
@@ -229,100 +337,76 @@ class GenomeFASTA(RegionReader):
 
         root = zarr.open_group(out)
 
-        if length is not None:
-            seqs = root.empty(
-                self.name,
-                shape=(n_seqs, length),
-                dtype="|S1",
-                chunks=(batch_size, None),
-                overwrite=overwrite,
-                compressor=compressor,
-            )
-            seqs.attrs["_ARRAY_DIMENSIONS"] = ["_sequence", "length"]
+        seqs = root.empty(
+            self.name,
+            shape=(n_seqs, length),
+            dtype="|S1",
+            chunks=(batch_size, None),
+            overwrite=overwrite,
+            compressor=compressor,
+        )
+        seqs.attrs["_ARRAY_DIMENSIONS"] = ["_sequence", self.length_dim]
 
-            def byte_reader(bed: pd.DataFrame, f: pysam.FastaFile):
-                for i, row in tqdm(bed.iterrows(), total=len(bed)):
-                    contig, start, end = row[:3]
-                    seq = f.fetch(contig, start, end).encode("ascii")
-                    if (pad_len := end - start - len(seq)) > 0:
-                        pad_left = start < 0
-                        if pad_left:
-                            seq = (b"N" * pad_len) + seq
-                        else:
-                            seq += b"N" * pad_len
-                    out = cast(NDArray[np.bytes_], np.frombuffer(seq, "|S1"))
-                    yield out
+        batch = cast(NDArray[np.bytes_], np.empty((batch_size, length), dtype="|S1"))
 
-            def byte_write_row_to_batch(
-                row: NDArray[np.bytes_], out: NDArray[np.bytes_]
+        with pysam.FastaFile(str(self.fasta)) as f:
+            if splice:
+                row_batcher = _get_row_batcher(self._spliced_reader(bed, f), batch_size)
+            else:
+                row_batcher = _get_row_batcher(self._reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, seq, idx, start in tqdm(
+                row_batcher, total=n_seqs
             ):
-                row[:] = out
+                seq = np.frombuffer(seq, "|S1")
+                batch[idx] = seq
+                if is_last_in_batch or is_last_row:
+                    to_rc_mask = to_rc[start : start + idx + 1]
+                    batch[to_rc_mask] = self.alphabet.rev_comp_byte(batch[to_rc_mask])
+                    seqs[start : start + idx + 1] = batch[: idx + 1]
 
-            def byte_write_batch_to_sink(
-                sink: zarr.Array, batch: NDArray[np.bytes_], start_idx: int
+    def _write_variable_length(
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        overwrite: bool,
+        splice: bool,
+    ):
+        blosc.set_nthreads(self.n_threads)
+        compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+        n_seqs = len(bed)
+        batch_size = min(n_seqs, self.batch_size)
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        root = zarr.open_group(out)
+
+        seqs = root.empty(
+            self.name,
+            shape=n_seqs,
+            dtype=object,
+            chunks=batch_size,
+            overwrite=overwrite,
+            compressor=compressor,
+            object_codec=VLenBytes(),
+        )
+        seqs.attrs["_ARRAY_DIMENSIONS"] = ["_sequence"]
+
+        batch = cast(NDArray[np.object_], np.empty(batch_size, dtype=object))
+
+        with pysam.FastaFile(str(self.fasta)) as f:
+            if splice:
+                row_batcher = _get_row_batcher(self._spliced_reader(bed, f), batch_size)
+            else:
+                row_batcher = _get_row_batcher(self._reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, seq, idx, start in tqdm(
+                row_batcher, total=n_seqs
             ):
-                sink[start_idx : start_idx + len(batch)] = batch
-
-            batch = cast(
-                NDArray[np.bytes_], np.empty((batch_size, length), dtype="|S1")
-            )
-
-            with pysam.FastaFile(str(self.fasta)) as f:
-                _batch_io_bed(
-                    seqs,
-                    batch,
-                    byte_reader(bed, f),
-                    byte_write_row_to_batch,
-                    byte_write_batch_to_sink,
-                    to_rc,
-                    self.alphabet,
-                )
-        else:
-            seqs = root.empty(
-                self.name,
-                shape=n_seqs,
-                dtype=object,
-                chunks=batch_size,
-                overwrite=overwrite,
-                compressor=compressor,
-                object_codec=VLenBytes(),
-            )
-            seqs.attrs["_ARRAY_DIMENSIONS"] = ["_sequence"]
-
-            def obj_reader(bed: pd.DataFrame, f: pysam.FastaFile):
-                for i, row in tqdm(bed.iterrows(), total=len(bed)):
-                    contig, start, end = cast(Tuple[str, int, int], row[:3])
-                    seq = f.fetch(contig, start, end).encode("ascii")
-                    if (pad_len := end - start - len(seq)) > 0:
-                        pad_left = start < 0
-                        if pad_left:
-                            seq = (b"N" * pad_len) + seq
-                        else:
-                            seq += b"N" * pad_len
-                    yield cast(NDArray[np.object_], np.array([seq], object))
-
-            def obj_write_row_to_batch(
-                row: NDArray[np.object_], out: NDArray[np.object_]
-            ):
-                row[:] = out[0]
-
-            def obj_write_batch_to_sink(
-                sink: zarr.Array, batch: NDArray[np.object_], start_idx: int
-            ):
-                sink[start_idx : start_idx + len(batch)] = batch
-
-            batch = cast(NDArray[np.object_], np.empty(batch_size, object))
-
-            with pysam.FastaFile(str(self.fasta)) as f:
-                _batch_io_bed(
-                    seqs,
-                    batch,
-                    obj_reader(bed, f),
-                    obj_write_row_to_batch,
-                    obj_write_batch_to_sink,
-                    to_rc,
-                    self.alphabet,
-                )
+                if to_rc[start + idx]:
+                    batch[idx] = self.alphabet.rev_comp_bstring(seq)
+                else:
+                    batch[idx] = seq
+                if is_last_in_batch or is_last_row:
+                    seqs[start : start + idx + 1] = batch[: idx + 1]
 
 
 class BigWig(RegionReader, Generic[DTYPE]):
@@ -347,29 +431,17 @@ class BigWig(RegionReader, Generic[DTYPE]):
         self.dtype = np.dtype(dtype)
 
     def _reader(self, bed: pd.DataFrame, f):
-        for i, row in tqdm(bed.iterrows(), total=len(bed)):
+        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
             intervals = cast(
                 List[Tuple[int, int, Union[int, float]]],
                 f.intervals(contig, start, end),
             )
             start = cast(int, start)
-            yield intervals, start
+            end = cast(int, end)
+            yield intervals, start, end
 
-    def _write_row_to_batch(
-        self,
-        row: NDArray[DTYPE],
-        out: Tuple[List[Tuple[int, int, Union[int, float]]], int],
-    ):
-        intervals, start = out
-        if intervals is not None:
-            for interval in intervals:
-                rel_start = interval[0] - start
-                rel_end = interval[1] - start
-                value = interval[2]
-                row[rel_start:rel_end] = value
-
-    def _read_bigwig(
+    def _read_bigwig_fixed_length(
         self,
         coverage: zarr.Array,
         bigwig: PathType,
@@ -377,33 +449,59 @@ class BigWig(RegionReader, Generic[DTYPE]):
         batch_size: int,
         sample_idx: int,
         n_threads: int,
-        dtype: Type[Union[np.number, np.object_]],
-        length: Optional[int] = None,
+        length: int,
     ):
-        def write_batch_to_sink(
-            sink: zarr.Array, batch: NDArray[DTYPE], start_idx: int
-        ):
-            # (batch [length]) = (batch [length])
-            sink[start_idx : start_idx + len(batch), sample_idx] = batch
-
         blosc.set_nthreads(n_threads)
         to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
-        if length is None:
-            shape = batch_size
-        else:
-            shape = (batch_size, length)
+        batch = np.zeros((batch_size, length), self.dtype)
 
-        batch = np.zeros(shape, dtype)
         with pyBigWig.open(bigwig) as f:
-            _batch_io_bed(
-                coverage,
-                batch,
-                self._reader(bed, f),
-                self._write_row_to_batch,  # type: ignore
-                write_batch_to_sink,  # type: ignore
-                to_rc,
-            )
+            row_batcher = _get_row_batcher(self._reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
+                intervals, start, end = out
+                if intervals is not None:
+                    for interval in intervals:
+                        rel_start = interval[0] - start
+                        rel_end = interval[1] - start
+                        value = interval[2]
+                        batch[idx, rel_start:rel_end] = value
+                if is_last_row or is_last_in_batch:
+                    to_rc_mask = to_rc[start : start + idx + 1]
+                    batch[to_rc_mask] = batch[to_rc_mask, ::-1]
+                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
+
+    def _read_bigwig_variable_length(
+        self,
+        coverage: zarr.Array,
+        bigwig: PathType,
+        bed: pd.DataFrame,
+        batch_size: int,
+        sample_idx: int,
+        n_threads: int,
+    ):
+        blosc.set_nthreads(n_threads)
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        batch = np.empty(batch_size, object)
+
+        with pyBigWig.open(bigwig) as f:
+            row_batcher = _get_row_batcher(self._reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
+                intervals, start, end = out
+                row = np.zeros((end - start), self.dtype)
+                if intervals is not None:
+                    for interval in intervals:
+                        rel_start = interval[0] - start
+                        rel_end = interval[1] - start
+                        value = interval[2]
+                        row[rel_start:rel_end] = value
+                if to_rc[idx]:
+                    batch[idx] = row[::-1]
+                else:
+                    batch[idx] = row
+                if is_last_in_batch or is_last_row:
+                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
 
     def _write(
         self,
@@ -412,6 +510,18 @@ class BigWig(RegionReader, Generic[DTYPE]):
         length: Optional[int] = None,
         overwrite=False,
     ) -> None:
+        if length is None:
+            self._write_variable_length(out, bed, overwrite)
+        else:
+            self._write_fixed_length(out, bed, length, overwrite)
+
+    def _write_fixed_length(
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        length: int,
+        overwrite=False,
+    ):
         compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
 
         batch_size = min(len(bed), self.batch_size)
@@ -425,50 +535,85 @@ class BigWig(RegionReader, Generic[DTYPE]):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
-        if length is None:
-            shape = (len(bed), len(self.samples))
-            _dtype = object
-            chunks = (batch_size, self.samples_per_chunk)
-            arr_dims = [
-                "_sequence",
-                f"{self.name}_sample",
-            ]
-            object_codec = VLenArray(self.dtype)
-        else:
-            shape = (len(bed), len(self.samples), length)
-            _dtype = self.dtype
-            chunks = (batch_size, self.samples_per_chunk, None)
-            arr_dims = [
-                "_sequence",
-                f"{self.name}_sample",
-                f"{self.name}_length",
-            ]
-            object_codec = None
-
         coverage = z.zeros(
             self.name,
-            shape=shape,
-            dtype=_dtype,
-            chunks=chunks,
+            shape=(len(bed), len(self.samples), length),
+            dtype=self.dtype,
+            chunks=(batch_size, self.samples_per_chunk, None),
             overwrite=overwrite,
             compressor=compressor,
             filters=[Delta(self.dtype)],
-            object_codec=object_codec,
         )
-        coverage.attrs["_ARRAY_DIMENSIONS"] = arr_dims
+        coverage.attrs["_ARRAY_DIMENSIONS"] = [
+            "_sequence",
+            f"{self.name}_sample",
+            f"{self.name}_length",
+        ]
 
         sample_idxs = np.arange(len(self.samples))
         tasks = [
             joblib.delayed(
-                self._read_bigwig(
+                self._read_bigwig_fixed_length(
                     coverage,
                     bigwig,
                     bed,
                     batch_size,
                     sample_idx,
                     self.threads_per_job,
-                    dtype=_dtype,  # type: ignore
                     length=length,
+                )
+                for bigwig, sample_idx in zip(self.bigwigs, sample_idxs)
+            )
+        ]
+        with joblib.parallel_backend(
+            "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
+        ):
+            joblib.Parallel()(tasks)
+
+    def _write_variable_length(
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        overwrite=False,
+    ):
+        compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+        batch_size = min(len(bed), self.batch_size)
+        z = zarr.open_group(out)
+
+        arr = z.array(
+            f"{self.name}_samples",
+            data=np.array(self.samples, object),
+            compressor=compressor,
+            overwrite=overwrite,
+        )
+        arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
+
+        coverage = z.empty(
+            self.name,
+            shape=(len(bed), len(self.samples)),
+            dtype=object,
+            chunks=(batch_size, self.samples_per_chunk),
+            overwrite=overwrite,
+            compressor=compressor,
+            filters=[Delta(self.dtype)],
+            object_codec=VLenArray(self.dtype),
+        )
+        coverage.attrs["_ARRAY_DIMENSIONS"] = [
+            "_sequence",
+            f"{self.name}_sample",
+        ]
+
+        sample_idxs = np.arange(len(self.samples))
+        tasks = [
+            joblib.delayed(
+                self._read_bigwig_variable_length(
+                    coverage,
+                    bigwig,
+                    bed,
+                    batch_size,
+                    sample_idx,
+                    self.threads_per_job,
                 )
                 for bigwig, sample_idx in zip(self.bigwigs, sample_idxs)
             )
@@ -501,7 +646,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.dtype = np.dtype(dtype)
 
     def _reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
-        for i, row in tqdm(bed.iterrows(), total=len(bed)):
+        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
             a, c, g, t = f.count_coverage(
                 contig, max(start, 0), end, read_callback="all"
@@ -516,10 +661,7 @@ class BAM(RegionReader, Generic[DTYPE]):
                     coverage = np.concatenate([coverage, pad_arr])
             yield cast(NDArray[DTYPE], coverage)
 
-    def _write_row_to_batch(self, row: NDArray[DTYPE], out: NDArray[DTYPE]):
-        row[:] = out
-
-    def _read_bam(
+    def _read_bam_fixed_length(
         self,
         coverage: zarr.Array,
         bam: PathType,
@@ -527,36 +669,60 @@ class BAM(RegionReader, Generic[DTYPE]):
         batch_size: int,
         sample_idx: int,
         n_threads: int,
-        dtype: Type[Union[np.number, np.object_]],
-        length: Optional[int] = None,
+        length: int,
     ):
-        def write_batch_to_sink(
-            sink: zarr.Array, batch: NDArray[DTYPE], start_idx: int
-        ):
-            sink[start_idx : start_idx + len(batch), sample_idx] = batch
-
         blosc.set_nthreads(n_threads)
         to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
-        if length is None:
-            shape = batch_size
-        else:
-            shape = (batch_size, length)
+        batch = np.zeros((batch_size, length), self.dtype)
 
-        batch = np.zeros(shape, dtype)
         with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
-            _batch_io_bed(
-                coverage,
-                batch,
-                self._reader(bed, f),
-                self._write_row_to_batch,  # type: ignore
-                write_batch_to_sink,  # type: ignore
-                to_rc,
-            )
+            row_batcher = _get_row_batcher(self._reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
+                batch[idx] = out
+                if is_last_in_batch or is_last_row:
+                    to_rc_mask = to_rc[start : start + idx + 1]
+                    batch[to_rc_mask] = batch[to_rc_mask, ::-1]
+                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
+
+    def _read_bam_variable_length(
+        self,
+        coverage: zarr.Array,
+        bam: PathType,
+        bed: pd.DataFrame,
+        batch_size: int,
+        sample_idx: int,
+        n_threads: int,
+    ):
+        blosc.set_nthreads(n_threads)
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        batch = np.empty(batch_size, object)
+
+        with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
+            row_batcher = _get_row_batcher(self._reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
+                if to_rc[idx]:
+                    out = out[::-1]
+                batch[idx] = out
+                if is_last_in_batch or is_last_row:
+                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
 
     def _write(
-        self, out: PathType, length: int, bed: pd.DataFrame, overwrite=False
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        length: Optional[int] = None,
+        overwrite=False,
     ) -> None:
+        if length is None:
+            self._write_variable_length(out, bed, overwrite)
+        else:
+            self._write_fixed_length(out, bed, length, overwrite)
+
+    def _write_fixed_length(
+        self, out: PathType, bed: pd.DataFrame, length: int, overwrite=False
+    ):
         compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
 
         batch_size = min(len(bed), self.batch_size)
@@ -570,50 +736,80 @@ class BAM(RegionReader, Generic[DTYPE]):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
-        if length is None:
-            shape = (len(bed), len(self.samples))
-            _dtype = object
-            chunks = (batch_size, self.samples_per_chunk)
-            arr_dims = [
-                "_sequence",
-                f"{self.name}_sample",
-            ]
-            object_codec = VLenArray(self.dtype)
-        else:
-            shape = (len(bed), len(self.samples), length)
-            _dtype = self.dtype
-            chunks = (batch_size, self.samples_per_chunk, None)
-            arr_dims = [
-                "_sequence",
-                f"{self.name}_sample",
-                f"{self.name}_length",
-            ]
-            object_codec = None
-
         coverage = z.zeros(
             self.name,
-            shape=shape,
-            dtype=_dtype,
-            chunks=chunks,
+            shape=(len(bed), len(self.samples), length),
+            dtype=self.dtype,
+            chunks=(batch_size, self.samples_per_chunk, None),
             overwrite=overwrite,
             compressor=compressor,
             filters=[Delta(self.dtype)],
-            object_codec=object_codec,
         )
-        coverage.attrs["_ARRAY_DIMENSIONS"] = arr_dims
+        coverage.attrs["_ARRAY_DIMENSIONS"] = [
+            "_sequence",
+            f"{self.name}_sample",
+            f"{self.name}_length",
+        ]
 
         sample_idxs = np.arange(len(self.samples))
         tasks = [
             joblib.delayed(
-                self._read_bam(
+                self._read_bam_fixed_length(
                     coverage,
                     bam,
                     bed,
                     batch_size,
                     sample_idx,
                     self.threads_per_job,
-                    dtype=_dtype,  # type: ignore
                     length=length,
+                )
+                for bam, sample_idx in zip(self.bams, sample_idxs)
+            )
+        ]
+        with joblib.parallel_backend(
+            "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
+        ):
+            joblib.Parallel()(tasks)
+
+    def _write_variable_length(self, out: PathType, bed: pd.DataFrame, overwrite=False):
+        compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+        batch_size = min(len(bed), self.batch_size)
+        z = zarr.open_group(out)
+
+        arr = z.array(
+            f"{self.name}_samples",
+            data=np.array(self.samples, object),
+            compressor=compressor,
+            overwrite=overwrite,
+        )
+        arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
+
+        coverage = z.empty(
+            self.name,
+            shape=(len(bed), len(self.samples)),
+            dtype=object,
+            chunks=(batch_size, self.samples_per_chunk),
+            overwrite=overwrite,
+            compressor=compressor,
+            filters=[Delta(self.dtype)],
+            object_codec=VLenArray(self.dtype),
+        )
+        coverage.attrs["_ARRAY_DIMENSIONS"] = [
+            "_sequence",
+            f"{self.name}_sample",
+        ]
+
+        sample_idxs = np.arange(len(self.samples))
+        tasks = [
+            joblib.delayed(
+                self._read_bam_variable_length(
+                    coverage,
+                    bam,
+                    bed,
+                    batch_size,
+                    sample_idx,
+                    self.threads_per_job,
                 )
                 for bam, sample_idx in zip(self.bams, sample_idxs)
             )
@@ -690,7 +886,7 @@ class VCF(RegionReader):
         vcf: cyvcf2.VCF,
         sample_order: NDArray[np.intp],
     ):
-        for i, row in tqdm(bed.iterrows(), total=len(bed)):
+        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
             start = cast(int, start)
             seq_bytes = f.fetch(contig, max(start, 0), end).encode("ascii")
@@ -714,13 +910,53 @@ class VCF(RegionReader):
             alleles = cast(NDArray[np.bytes_], np.stack(alleles_ls, -1)[sample_order])
             # (samples haplotypes variants) = (samples haplotypes variants)
             tiled_seq[..., relative_positions] = alleles
+            # (samples haplotypes length)
             yield tiled_seq
 
-    def _write_batch_to_sink(
-        self, sink: zarr.Array, batch: NDArray[np.bytes_], start_idx: int
+    def _spliced_reader(
+        self,
+        bed: pd.DataFrame,
+        f: pysam.FastaFile,
+        vcf: cyvcf2.VCF,
+        sample_order: NDArray[np.intp],
     ):
-        # (batch samples haplotypes [length]) = (batch samples haplotypes [length])
-        sink[start_idx : start_idx + len(batch)] = batch
+        pbar = tqdm(total=len(bed))
+        for rows in split_when(
+            bed.itertuples(index=False), lambda x, y: x.name != y.name
+        ):
+            unspliced: List[NDArray[np.bytes_]] = []
+            for row in rows:
+                pbar.update()
+                contig, start, end = row[:3]
+                start = cast(int, start)
+                seq_bytes = f.fetch(contig, max(start, 0), end).encode("ascii")
+                if (pad_len := end - start - len(seq_bytes)) > 0:
+                    pad_left = start < 0
+                    if pad_left:
+                        seq_bytes = b"N" * pad_len + seq_bytes
+                    else:
+                        seq_bytes += b"N" * pad_len
+                seq = cast(NDArray[np.bytes_], np.frombuffer(seq_bytes, "|S1"))
+                # (samples haplotypes length)
+                tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
+
+                region = f"{contig}:{max(start, 0)+1}-{end}"
+                positions_ls, alleles_ls = zip(
+                    *[self._get_pos_bases(v) for v in vcf(region) if v.is_snp]
+                )
+                # (variants)
+                relative_positions = (
+                    cast(NDArray[np.int64], np.array(positions_ls)) - start
+                )
+                # (samples haplotypes variants)
+                alleles = cast(
+                    NDArray[np.bytes_], np.stack(alleles_ls, -1)[sample_order]
+                )
+                # (samples haplotypes variants) = (samples haplotypes variants)
+                tiled_seq[..., relative_positions] = alleles
+                unspliced.append(tiled_seq)
+            # list of (samples haplotypes length)
+            yield np.concatenate(unspliced, -1)
 
     def _write(
         self,
@@ -728,19 +964,25 @@ class VCF(RegionReader):
         bed: pd.DataFrame,
         length: Optional[int] = None,
         overwrite=False,
+        splice=False,
     ) -> None:
         if length is None:
-
-            def write_row_to_batch(row: NDArray[np.bytes_], out: NDArray[np.bytes_]):
-                # (samples haplotypes) = (samples haplotypes)
-                row[:] = out[0]
-
+            self._write_variable_length(
+                out=out, bed=bed, overwrite=overwrite, splice=splice
+            )
         else:
+            self._write_fixed_length(
+                out=out, bed=bed, length=length, overwrite=overwrite, splice=splice
+            )
 
-            def write_row_to_batch(row: NDArray[np.bytes_], out: NDArray[np.bytes_]):
-                # (samples haplotypes length) = (samples haplotypes length)
-                row[:] = out
-
+    def _write_fixed_length(
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        length: int,
+        overwrite: bool,
+        splice: bool,
+    ):
         blosc.set_nthreads(self.n_threads)
         compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
 
@@ -749,38 +991,20 @@ class VCF(RegionReader):
 
         z = zarr.open_group(out)
 
-        if length is None:
-            shape = (len(bed), len(self.samples), 2)
-            _dtype = object
-            chunks = (batch_size, self.samples_per_chunk, None)
-            arr_dims = [
-                "_sequence",
-                f"{self.name}_sample",
-                f"haplotype",
-            ]
-            object_codec = VLenBytes()
-        else:
-            shape = (len(bed), len(self.samples), 2, length)
-            _dtype = "|S1"
-            chunks = (batch_size, self.samples_per_chunk, None, None)
-            arr_dims = [
-                "_sequence",
-                f"{self.name}_sample",
-                f"haplotype",
-                f"{self.name}_length",
-            ]
-            object_codec = None
-
         seqs = z.empty(
             self.name,
-            shape=shape,
-            dtype=_dtype,
-            chunks=chunks,
+            shape=(len(bed), len(self.samples), 2, length),
+            dtype="|S1",
+            chunks=(batch_size, self.samples_per_chunk, None, None),
             overwrite=overwrite,
             compressor=compressor,
-            object_codec=object_codec,
         )
-        seqs.attrs["_ARRAY_DIMENSIONS"] = arr_dims
+        seqs.attrs["_ARRAY_DIMENSIONS"] = [
+            "_sequence",
+            f"{self.name}_sample",
+            "haplotype",
+            f"{self.name}_length",
+        ]
 
         arr = z.array(
             f"{self.name}_samples",
@@ -798,17 +1022,125 @@ class VCF(RegionReader):
         *_, sample_order = np.intersect1d(
             _vcf.samples, self.samples, assume_unique=True, return_indices=True
         )
-        # (sequences samples haplotypes [length])
-        batch = np.empty((batch_size, *shape[1:]), dtype=_dtype)
+
+        # (batch samples haplotypes length)
+        batch = cast(
+            NDArray[np.bytes_], np.empty((batch_size, *seqs.shape[1:]), dtype="|S1")
+        )
+
         with pysam.FastaFile(str(self.fasta)) as f:
-            _batch_io_bed(
-                seqs,
-                batch,
-                self._reader(bed, f, _vcf, sample_order),
-                write_row_to_batch,
-                self._write_batch_to_sink,
-                to_rc,
-                self.alphabet,
+            if splice:
+                reader = self._spliced_reader
+            else:
+                reader = self._reader
+            row_batcher = _get_row_batcher(
+                reader(bed, f, _vcf, sample_order), batch_size
             )
+            for is_last_row, is_last_in_batch, seq, idx, start in tqdm(
+                row_batcher, total=n_seqs
+            ):
+                # (samples haplotypes length)
+                batch[idx] = seq
+                if is_last_in_batch or is_last_row:
+                    to_rc_mask = to_rc[start : start + idx + 1]
+                    batch[to_rc_mask] = self.alphabet.rev_comp_byte(batch[to_rc_mask])
+                    seqs[start : start + idx + 1] = batch[: idx + 1]
 
         _vcf.close()
+
+    def _write_variable_length(
+        self, out: PathType, bed: pd.DataFrame, overwrite: bool, splice: bool
+    ):
+        blosc.set_nthreads(self.n_threads)
+        compressor = blosc.Blosc("zstd", clevel=7, shuffle=-1)
+
+        n_seqs = len(bed)
+        batch_size = min(n_seqs, self.batch_size)
+
+        z = zarr.open_group(out)
+
+        seqs = z.empty(
+            self.name,
+            shape=(len(bed), len(self.samples), 2),
+            dtype=object,
+            chunks=(batch_size, self.samples_per_chunk, None, None),
+            overwrite=overwrite,
+            compressor=compressor,
+            object_codec=VLenBytes(),
+        )
+        seqs.attrs["_ARRAY_DIMENSIONS"] = [
+            "_sequence",
+            f"{self.name}_sample",
+            "haplotype",
+        ]
+
+        arr = z.array(
+            f"{self.name}_samples",
+            np.array(self.samples, object),
+            compressor=compressor,
+            overwrite=overwrite,
+        )
+        arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
+
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        _vcf = cyvcf2.VCF(
+            self.vcf, lazy=True, samples=self.samples, threads=self.n_threads
+        )
+        *_, sample_order = np.intersect1d(
+            _vcf.samples, self.samples, assume_unique=True, return_indices=True
+        )
+
+        # (batch samples haplotypes)
+        batch = cast(
+            NDArray[np.bytes_], np.empty((batch_size, *seqs.shape[1:]), dtype="|S1")
+        )
+
+        with pysam.FastaFile(str(self.fasta)) as f:
+            if splice:
+                reader = self._spliced_reader
+            else:
+                reader = self._reader
+            row_batcher = _get_row_batcher(
+                reader(bed, f, _vcf, sample_order), batch_size
+            )
+            for is_last_row, is_last_in_batch, seq, idx, start in tqdm(
+                row_batcher, total=n_seqs
+            ):
+                # (samples haplotypes)
+                if to_rc[idx]:
+                    seq = self.alphabet.rev_comp_byte(seq)
+                batch[idx] = np.array(
+                    [
+                        np.array(arr)
+                        for arr in seq.view(f"|S{seq.shape[-1]}").squeeze().ravel()
+                    ],
+                    object,
+                ).reshape(seq.shape[:-1])
+                if is_last_in_batch or is_last_row:
+                    seqs[start : start + idx + 1] = batch[: idx + 1]
+
+        _vcf.close()
+
+    def _sequence_generator(self, bed: pd.DataFrame, splice=False):
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        _vcf = cyvcf2.VCF(
+            self.vcf, lazy=True, samples=self.samples, threads=self.n_threads
+        )
+        *_, sample_order = np.intersect1d(
+            _vcf.samples, self.samples, assume_unique=True, return_indices=True
+        )
+
+        with pysam.FastaFile(str(self.fasta)) as f:
+            if splice:
+                reader = self._spliced_reader
+            else:
+                reader = self._reader
+            # (samples haplotypes length)
+            for i, seqs in enumerate(reader(bed, f, _vcf, sample_order)):
+                if to_rc[i]:
+                    seqs = self.alphabet.rev_comp_byte(seqs)
+                seqs = seqs.view(f"|S{seqs.shape[-1]}")
+                for seq in seqs.ravel():
+                    yield seq

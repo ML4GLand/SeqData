@@ -1,13 +1,15 @@
-from typing import Callable, Generator, List, Optional
+from itertools import count, cycle
+from typing import Generator, List, Literal, Tuple
 
 import numpy as np
 import pandas as pd
 import zarr
+from more_itertools import mark_ends, repeat_each
 from numcodecs import VLenUTF8
 from numpy.typing import NDArray
 
 from seqdata.alphabets import SequenceAlphabet
-from seqdata.types import DTYPE, T
+from seqdata.types import T
 
 
 def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dims: List[str], **kwargs):
@@ -21,57 +23,17 @@ def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dims: List[str], **kwargs
         arr.attrs["_ARRAY_DIMENSIONS"] = dims
 
 
-def _batch_io(
-    sink: zarr.Array,
-    batch: NDArray[DTYPE],
-    reader: Generator[T, None, None],
-    write_row_to_batch: Callable[[NDArray[DTYPE], T], None],
-    write_batch_to_sink: Callable[[zarr.Array, NDArray[DTYPE], int], None],
-):
-    batch_size = len(batch)
-    start_idx = 0
-    idx = 0
-    for row in reader:
-        write_row_to_batch(batch[idx], row)
-        idx += 1
-        if idx == batch_size:
-            write_batch_to_sink(sink, batch, start_idx)
-            start_idx += batch_size
-            idx = 0
-    if idx != batch_size:
-        write_batch_to_sink(sink, batch[:idx], start_idx)
-
-
-def _batch_io_bed(
-    sink: zarr.Array,
-    batch: NDArray[DTYPE],
-    reader: Generator[T, None, None],
-    write_row_to_batch: Callable[[NDArray[DTYPE], T], None],
-    write_batch_to_sink: Callable[[zarr.Array, NDArray[DTYPE], int], None],
-    to_rc: NDArray[np.bool_],
-    alphabet: Optional[SequenceAlphabet] = None,
-):
-    batch_size = len(batch)
-    start_idx = 0
-    idx = 0
-    for row in reader:
-        write_row_to_batch(batch[idx], row)
-        idx += 1
-        if idx == batch_size:
-            batch_to_rc = to_rc[start_idx : start_idx + batch_size]
-            if batch.dtype.type == np.bytes_:
-                batch[batch_to_rc] = complement_bytes(batch[batch_to_rc], alphabet)  # type: ignore
-            batch[batch_to_rc] = np.flip(batch[batch_to_rc], 1)
-            write_batch_to_sink(sink, batch, start_idx)
-            start_idx += batch_size
-            idx = 0
-    if idx != 0:
-        batch = batch[:idx]
-        batch_to_rc = to_rc[start_idx:]
-        if batch.dtype.type == np.bytes_:
-            batch[batch_to_rc] = complement_bytes(batch[batch_to_rc], alphabet)  # type: ignore
-        batch[batch_to_rc] = np.flip(batch[batch_to_rc], 1)
-        write_batch_to_sink(sink, batch, start_idx)
+def _get_row_batcher(
+    reader: Generator[T, None, None], batch_size: int
+) -> Generator[Tuple[bool, bool, T, int, int], None, None]:
+    batch_idxs = cycle(mark_ends(range(batch_size)))
+    start_idxs = repeat_each(count(0, batch_size), batch_size)
+    for row_info, batch_info, start_idx in zip(
+        mark_ends(reader), batch_idxs, start_idxs
+    ):
+        first_row, last_row, row = row_info
+        first_in_batch, last_in_batch, batch_idx = batch_info
+        yield last_row, last_in_batch, row, batch_idx, start_idx
 
 
 def bytes_to_ohe(
@@ -104,11 +66,13 @@ def complement_bytes(
     Parameters
     ----------
     byte_arr : ndarray[bytes]
-        Array of shape (regions [samples] [ploidy] length) to complement.
+        Array of shape `(..., length)` to complement. In other words, elements of the array should be
+        single characters.
     complement_map : dict[bytes, bytes]
         Dictionary mapping nucleotides to their complements.
     """
-    # NOTE: a vectorized implementation using np.unique is not faster even for IUPAC DNA/RNA.
+    # NOTE: a vectorized implementation using np.unique is NOT faster even for longer alphabets like IUPAC DNA/RNA.
+    # Another micro-optimization to try would be using vectorized bit manipulations.
     out = np.empty_like(byte_arr)
     for nuc, comp in alphabet.complement_map_bytes.items():
         if nuc == b"N":
@@ -143,3 +107,22 @@ def rev_comp_ohe(ohe_arr: NDArray[np.uint8], has_N: bool) -> NDArray[np.uint8]:
     else:
         ohe_arr = np.flip(ohe_arr, -1)
     return np.flip(ohe_arr, -2)
+
+
+def rev_comp_string(string: str, alphabet: SequenceAlphabet):
+    comp = string.translate(alphabet.str_comp_table)
+    return comp[::-1]
+
+
+def rev_comp_bstring(bstring: bytes, alphabet: SequenceAlphabet):
+    comp = bstring.translate(alphabet.bytes_comp_table)
+    return comp[::-1]
+
+
+def pad_byte_str(
+    bstring: bytes,
+    pad_len: int,
+    padding: Literal["left", "center", "right"],
+    alphabet: SequenceAlphabet,
+):
+    raise NotImplementedError
