@@ -17,10 +17,14 @@ def _filter_by_exact_dims(ds: xr.Dataset, dims: Union[str, Tuple[str, ...]]):
     return ds[selector]
 
 
-def _filter_obsm(ds: xr.Dataset):
+def _filter_layers(ds: xr.Dataset):
     selector = []
     for name, arr in ds.data_vars.items():
-        if len(arr.dims) > 1 and arr.dims[0] == "_sequence":
+        if (
+            len(arr.dims) > 1
+            and arr.dims[0] == "_sequence"
+            and arr.dims[1] != "_sequence"
+        ):
             selector.append(name)
     return ds[selector]
 

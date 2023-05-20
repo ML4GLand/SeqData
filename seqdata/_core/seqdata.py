@@ -32,7 +32,12 @@ from seqdata._io.bed_ops import (
 from seqdata._io.utils import _df_to_xr_zarr
 from seqdata.types import FlatReader, PathType, RegionReader
 
-from .utils import _cartesian_product, _filter_by_exact_dims, _filter_obsm, _filter_uns
+from .utils import (
+    _cartesian_product,
+    _filter_by_exact_dims,
+    _filter_layers,
+    _filter_uns,
+)
 
 try:
     import torch
@@ -85,8 +90,8 @@ class SeqData:
         return _filter_by_exact_dims(self.ds, "_sequence")
 
     @property
-    def obsm(self):
-        return _filter_obsm(self.ds)
+    def layers(self):
+        return _filter_layers(self.ds)
 
     @property
     def obsp(self):
@@ -197,9 +202,34 @@ class SeqData:
         path: PathType,
         length: Optional[int] = None,
         bed: Optional[Union[PathType, pd.DataFrame]] = None,
-        max_jitter: int = 0,
+        max_jitter=0,
         overwrite=False,
+        splice=False,
     ) -> Self:
+        """Save a SeqData to disk and open it (without loading it into memory).
+
+        Parameters
+        ----------
+        path : str, Path
+            Path to save this SeqData to.
+        length : Optional[int], optional
+            Length of regions to write. If provided, will expand/shrink bed coordinates
+            to have this length.
+        bed : str, Path, pd.DataFrame, optional
+            BED file or DataFrame matching a BED-like specification specifying what
+            regions to write.
+        max_jitter : int, optional
+            How much jitter to allow for the SeqData object by writing additional
+            flanking sequences, by default 0
+        overwrite : bool, optional
+            Whether to overwrite any existing SeqData, by default False
+        splice : bool, optional
+            Whether to splice together regions that have the same name, by default False
+
+        Returns
+        -------
+        SeqData
+        """
         root = zarr.open_group(path)
         root.attrs["max_jitter"] = max_jitter
 
@@ -209,14 +239,24 @@ class SeqData:
             else:
                 _bed = bed
 
-            if length is not None:
-                length += 2 * max_jitter
-                _set_uniform_length_around_center(_bed, length)
-            elif length is None:
-                _expand_regions(_bed, max_jitter)
+            if splice and length is not None:
+                raise ValueError("Changing length is incompatible with splicing.")
+            if splice and max_jitter > 0:
+                raise ValueError("Jitter is incompatible with splicing.")
+            if not splice:
+                if length is not None:
+                    length += 2 * max_jitter
+                    _set_uniform_length_around_center(_bed, length)
+                elif length is None:
+                    _expand_regions(_bed, max_jitter)
+
+            if splice:
+                bed_to_write = _bed.groupby("name").agg(list).reset_index()
+            else:
+                bed_to_write = _bed
 
             _df_to_xr_zarr(
-                _bed,
+                bed_to_write,
                 root,
                 ["_sequence"],
                 compressor=Blosc("zstd", clevel=7, shuffle=-1),
@@ -239,6 +279,7 @@ class SeqData:
                     bed=_bed,  # type: ignore
                     length=length,  # type: ignore
                     overwrite=overwrite,
+                    splice=splice,
                 )
 
         zarr.consolidate_metadata(path)  # type: ignore

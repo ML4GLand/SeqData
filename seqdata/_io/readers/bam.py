@@ -125,7 +125,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         z = zarr.open_group(out)
 
         arr = z.array(
-            f"{self.name}_samples",
+            f"{self.name}_sample",
             data=np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
@@ -174,7 +174,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         z = zarr.open_group(out)
 
         arr = z.array(
-            f"{self.name}_samples",
+            f"{self.name}_sample",
             data=np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,

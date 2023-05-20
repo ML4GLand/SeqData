@@ -55,7 +55,7 @@ class FlatFASTA(FlatReader):
             self.length = f.get_reference_length(seq_names[0])
 
             arr = z.array(
-                f"{self.name}_id",
+                "_sequence",
                 data=np.array(list(seq_names), object),
                 overwrite=overwrite,
             )

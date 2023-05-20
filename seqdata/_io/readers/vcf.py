@@ -9,7 +9,7 @@ import pysam
 import zarr
 from more_itertools import split_when
 from natsort import natsorted
-from numcodecs import Blosc, VLenBytes, blosc
+from numcodecs import Blosc, VLenBytes, VLenUTF8, blosc
 from numpy.typing import NDArray
 from tqdm import tqdm
 
@@ -65,18 +65,19 @@ class VCF(RegionReader):
         with pysam.FastaFile(str(fasta)) as f:
             fasta_contigs = set(f.references)
         _vcf = cyvcf2.VCF(str(vcf))
-        vcf_contigs = cast(Set[str], set(_vcf.seqlens))
+        try:
+            vcf_contigs = cast(Set[str], set(_vcf.seqlens))
+        except AttributeError:
+            warnings.warn("VCF header has no contig annotations.")
+            vcf_contigs: Set[str] = set()
         _vcf.close()
 
-        self.contigs = natsorted(fasta_contigs & vcf_contigs)
+        self.contigs = natsorted(fasta_contigs | vcf_contigs)
         if len(self.contigs) == 0:
-            raise RuntimeError("FASTA and VCF have no contigs in common.")
-        contigs_exclusive_to_fasta = natsorted(fasta_contigs - vcf_contigs)
+            raise RuntimeError("FASTA has no contigs.")
+        # * don't check for contigs exclusive to FASTA because VCF is not guaranteed to
+        # * have any contigs listed
         contigs_exclusive_to_vcf = natsorted(vcf_contigs - fasta_contigs)
-        if contigs_exclusive_to_fasta:
-            warnings.warn(
-                f"FASTA has contigs not found in VCF: {contigs_exclusive_to_fasta}"
-            )
         if contigs_exclusive_to_vcf:
             warnings.warn(
                 f"VCF has contigs not found in FASTA: {contigs_exclusive_to_vcf}"
@@ -99,15 +100,12 @@ class VCF(RegionReader):
     ):
         for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
-            start = cast(int, start)
+            start, end = cast(int, start), cast(int, end)
             seq_bytes = f.fetch(contig, max(start, 0), end).encode("ascii")
-            if (pad_len := end - start - len(seq_bytes)) > 0:
-                pad_left = start < 0
-                if pad_left:
-                    seq_bytes = b"N" * pad_len + seq_bytes
-                else:
-                    seq_bytes += b"N" * pad_len
-            seq = cast(NDArray[np.bytes_], np.frombuffer(seq_bytes, "|S1"))
+            pad_left = -min(start, 0)
+            pad_right = end - start - len(seq_bytes) - pad_left
+            seq_bytes = b"N" * pad_left + seq_bytes + b"N" * pad_right
+            seq = cast(NDArray[np.bytes_], np.array([seq_bytes], "S").view("S1"))
             # (samples haplotypes length)
             tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
 
@@ -139,14 +137,11 @@ class VCF(RegionReader):
             for row in rows:
                 pbar.update()
                 contig, start, end = row[:3]
-                start = cast(int, start)
+                start, end = cast(int, start), cast(int, end)
                 seq_bytes = f.fetch(contig, max(start, 0), end).encode("ascii")
-                if (pad_len := end - start - len(seq_bytes)) > 0:
-                    pad_left = start < 0
-                    if pad_left:
-                        seq_bytes = b"N" * pad_len + seq_bytes
-                    else:
-                        seq_bytes += b"N" * pad_len
+                pad_left = -min(start, 0)
+                pad_right = end - start - len(seq_bytes) - pad_left
+                seq_bytes = b"N" * pad_left + seq_bytes + b"N" * pad_right
                 seq = cast(NDArray[np.bytes_], np.frombuffer(seq_bytes, "|S1"))
                 # (samples haplotypes length)
                 tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
@@ -197,14 +192,17 @@ class VCF(RegionReader):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        n_seqs = len(bed)
+        if splice:
+            n_seqs = bed["name"].nunique()
+        else:
+            n_seqs = len(bed)
         batch_size = min(n_seqs, self.batch_size)
 
         z = zarr.open_group(out)
 
         seqs = z.empty(
             self.name,
-            shape=(len(bed), len(self.samples), 2, length),
+            shape=(n_seqs, len(self.samples), 2, length),
             dtype="|S1",
             chunks=(batch_size, self.samples_per_chunk, None, None),
             overwrite=overwrite,
@@ -218,10 +216,11 @@ class VCF(RegionReader):
         ]
 
         arr = z.array(
-            f"{self.name}_samples",
+            f"{self.name}_sample",
             np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
+            object_codec=VLenUTF8(),
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
@@ -265,16 +264,19 @@ class VCF(RegionReader):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        n_seqs = len(bed)
+        if splice:
+            n_seqs = bed["name"].nunique()
+        else:
+            n_seqs = len(bed)
         batch_size = min(n_seqs, self.batch_size)
 
         z = zarr.open_group(out)
 
         seqs = z.empty(
             self.name,
-            shape=(len(bed), len(self.samples), 2),
+            shape=(n_seqs, len(self.samples), 2),
             dtype=object,
-            chunks=(batch_size, self.samples_per_chunk, None, None),
+            chunks=(batch_size, self.samples_per_chunk, None),
             overwrite=overwrite,
             compressor=compressor,
             object_codec=VLenBytes(),
@@ -286,10 +288,11 @@ class VCF(RegionReader):
         ]
 
         arr = z.array(
-            f"{self.name}_samples",
+            f"{self.name}_sample",
             np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
+            object_codec=VLenUTF8(),
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
@@ -304,7 +307,7 @@ class VCF(RegionReader):
 
         # (batch samples haplotypes)
         batch = cast(
-            NDArray[np.bytes_], np.empty((batch_size, *seqs.shape[1:]), dtype="|S1")
+            NDArray[np.object_], np.empty((batch_size, *seqs.shape[1:]), dtype=object)
         )
 
         with pysam.FastaFile(str(self.fasta)) as f:
@@ -321,13 +324,7 @@ class VCF(RegionReader):
                 # (samples haplotypes)
                 if to_rc[idx]:
                     seq = self.alphabet.rev_comp_byte(seq)
-                batch[idx] = np.array(
-                    [
-                        np.array(arr)
-                        for arr in seq.view(f"|S{seq.shape[-1]}").squeeze().ravel()
-                    ],
-                    object,
-                ).reshape(seq.shape[:-1])
+                batch[idx] = seq.view(f"|S{seq.shape[-1]}").squeeze().astype(object)
                 if is_last_in_batch or is_last_row:
                     seqs[start : start + idx + 1] = batch[: idx + 1]
 

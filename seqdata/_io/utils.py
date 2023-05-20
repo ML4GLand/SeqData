@@ -1,11 +1,14 @@
+import logging
 from itertools import count, cycle
+from subprocess import CalledProcessError, run
+from textwrap import dedent
 from typing import Generator, List, Literal, Tuple
 
 import numpy as np
 import pandas as pd
 import zarr
 from more_itertools import mark_ends, repeat_each
-from numcodecs import VLenUTF8
+from numcodecs import VLenArray, VLenBytes, VLenUTF8
 from numpy.typing import NDArray
 
 from seqdata.alphabets import SequenceAlphabet
@@ -16,7 +19,14 @@ def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dims: List[str], **kwargs
     for name, series in df.items():
         data = series.to_numpy()
         if data.dtype.type == np.object_:
-            object_codec = VLenUTF8()
+            if isinstance(data[0], np.ndarray):
+                object_codec = VLenArray(data[0].dtype)
+            elif isinstance(data[0], str):
+                object_codec = VLenUTF8()
+            elif isinstance(data[0], bytes):
+                object_codec = VLenBytes()
+            else:
+                raise ValueError("Got column in dataframe that isn't serializable.")
         else:
             object_codec = None
         arr = root.array(name, data, object_codec=object_codec, **kwargs)
@@ -66,13 +76,14 @@ def complement_bytes(
     Parameters
     ----------
     byte_arr : ndarray[bytes]
-        Array of shape `(..., length)` to complement. In other words, elements of the array should be
-        single characters.
+        Array of shape `(..., length)` to complement. In other words, elements of the
+        array should be single characters.
     complement_map : dict[bytes, bytes]
         Dictionary mapping nucleotides to their complements.
     """
-    # NOTE: a vectorized implementation using np.unique is NOT faster even for longer alphabets like IUPAC DNA/RNA.
-    # Another micro-optimization to try would be using vectorized bit manipulations.
+    # NOTE: a vectorized implementation using np.unique is NOT faster even for longer
+    # alphabets like IUPAC DNA/RNA. Another micro-optimization to try would be using
+    # vectorized bit manipulations.
     out = np.empty_like(byte_arr)
     for nuc, comp in alphabet.complement_map_bytes.items():
         if nuc == b"N":
@@ -126,3 +137,13 @@ def pad_byte_str(
     alphabet: SequenceAlphabet,
 ):
     raise NotImplementedError
+
+
+def run_shell(cmd: str, logger: logging.Logger, **kwargs):
+    try:
+        status = run(dedent(cmd).strip(), check=True, shell=True, **kwargs)
+    except CalledProcessError as e:
+        logger.error(e.stdout)
+        logger.error(e.stderr)
+        raise e
+    return status

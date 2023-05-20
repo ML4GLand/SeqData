@@ -24,6 +24,24 @@ def _expand_regions(bed: pd.DataFrame, expansion_length: int):
 
 
 def _read_bedlike(path: PathType):
+    """Reads a bed-like file as a pandas DataFrame. The file type is inferred from the
+    file extension.
+
+    Parameters
+    ----------
+    path : PathType
+        _description_
+
+    Returns
+    -------
+    _type_
+        _description_
+
+    Raises
+    ------
+    ValueError
+        _description_
+    """
     path = Path(path)
     if path.suffix == ".bed":
         return _read_bed(path)

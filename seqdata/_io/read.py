@@ -1,4 +1,4 @@
-from typing import List, Optional, Type, Union
+from typing import TYPE_CHECKING, List, Optional, Type, Union
 
 import numpy as np
 
@@ -6,6 +6,9 @@ from seqdata._core.seqdata import SeqData
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from seqdata.alphabets import SequenceAlphabet
 from seqdata.types import PathType
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 def read_table(
@@ -145,7 +148,7 @@ def read_vcf(
     vcf: PathType,
     fasta: PathType,
     samples: List[str],
-    bed: PathType,
+    bed: Union[PathType, "pd.DataFrame"],
     batch_size: int,
     length: Optional[int] = None,
     n_threads=1,
@@ -153,6 +156,7 @@ def read_vcf(
     alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
+    splice=False,
 ) -> SeqData:
     sdata = SeqData.from_files(
         VCF(
@@ -170,5 +174,6 @@ def read_vcf(
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
+        splice=splice,
     )
     return sdata
