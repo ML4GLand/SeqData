@@ -1,4 +1,5 @@
-from typing import Union, List
+from typing import List, Union
+
 import numpy as np
 import pandas as pd
 
@@ -36,7 +37,7 @@ def concat(
     keys : str or list, optional
         Names to add in seqs_annot column "batch"
     """
-    from . import SeqData
+    from .seqdata import SeqData
 
     concat_seqs = (
         np.concatenate([s.seqs for s in sdatas]) if sdatas[0].seqs is not None else None
