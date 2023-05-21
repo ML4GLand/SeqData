@@ -43,15 +43,16 @@ def _read_bedlike(path: PathType):
         _description_
     """
     path = Path(path)
-    if path.suffix == ".bed":
+    if ".bed" in path.suffixes:
         return _read_bed(path)
-    elif path.suffix == ".narrowPeak":
+    elif ".narrowPeak" in path.suffixes:
         return _read_narrowpeak(path)
-    elif path.suffix == ".broadPeak":
+    elif ".broadPeak" in path.suffixes:
         return _read_broadpeak(path)
     else:
         raise ValueError(
-            f"Unrecognized file extension: {path.suffix}. Expected one of .bed, .narrowPeak, or .broadPeak"
+            f"""Unrecognized file extension: {''.join(path.suffixes)}. Expected one of 
+            .bed, .narrowPeak, or .broadPeak"""
         )
 
 
