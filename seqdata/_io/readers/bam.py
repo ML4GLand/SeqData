@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pysam
 import zarr
-from numcodecs import Blosc, Delta, VLenArray, blosc
+from numcodecs import Blosc, Delta, VLenArray, VLenUTF8, blosc
 from numpy.typing import NDArray
 from tqdm import tqdm
 
@@ -77,9 +77,10 @@ class BAM(RegionReader, Generic[DTYPE]):
             for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
                 batch[idx] = out
                 if is_last_in_batch or is_last_row:
+                    _batch = batch[: idx + 1]
                     to_rc_mask = to_rc[start : start + idx + 1]
-                    batch[to_rc_mask] = batch[to_rc_mask, ::-1]
-                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
+                    _batch[to_rc_mask] = _batch[to_rc_mask, ::-1]
+                    coverage[start : start + idx + 1, sample_idx] = _batch
 
     def _read_bam_variable_length(
         self,
@@ -110,6 +111,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         bed: pd.DataFrame,
         length: Optional[int] = None,
         overwrite=False,
+        splice=False,
     ) -> None:
         if length is None:
             self._write_variable_length(out, bed, overwrite)
@@ -129,6 +131,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             data=np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
+            object_codec=VLenUTF8(),
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
@@ -149,18 +152,16 @@ class BAM(RegionReader, Generic[DTYPE]):
 
         sample_idxs = np.arange(len(self.samples))
         tasks = [
-            joblib.delayed(
-                self._read_bam_fixed_length(
-                    coverage,
-                    bam,
-                    bed,
-                    batch_size,
-                    sample_idx,
-                    self.threads_per_job,
-                    length=length,
-                )
-                for bam, sample_idx in zip(self.bams, sample_idxs)
+            joblib.delayed(self._read_bam_fixed_length)(
+                coverage,
+                bam,
+                bed,
+                batch_size,
+                sample_idx,
+                self.threads_per_job,
+                length=length,
             )
+            for bam, sample_idx in zip(self.bams, sample_idxs)
         ]
         with joblib.parallel_backend(
             "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
@@ -178,6 +179,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             data=np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
+            object_codec=VLenUTF8(),
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
@@ -198,17 +200,15 @@ class BAM(RegionReader, Generic[DTYPE]):
 
         sample_idxs = np.arange(len(self.samples))
         tasks = [
-            joblib.delayed(
-                self._read_bam_variable_length(
-                    coverage,
-                    bam,
-                    bed,
-                    batch_size,
-                    sample_idx,
-                    self.threads_per_job,
-                )
-                for bam, sample_idx in zip(self.bams, sample_idxs)
+            joblib.delayed(self._read_bam_variable_length)(
+                coverage,
+                bam,
+                bed,
+                batch_size,
+                sample_idx,
+                self.threads_per_job,
             )
+            for bam, sample_idx in zip(self.bams, sample_idxs)
         ]
         with joblib.parallel_backend(
             "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job

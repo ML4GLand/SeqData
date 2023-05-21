@@ -2,13 +2,14 @@ from typing import TYPE_CHECKING, List, Optional, Type, Union
 
 import numpy as np
 
-from seqdata._core.seqdata import SeqData
+from seqdata._core.seqdata import from_files
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from seqdata.alphabets import SequenceAlphabet
 from seqdata.types import PathType
 
 if TYPE_CHECKING:
     import pandas as pd
+    import xarray as xr
 
 
 def read_table(
@@ -18,8 +19,8 @@ def read_table(
     seq_col: str,
     batch_size: int,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_files(
         Table(name=name, tables=tables, seq_col=seq_col, batch_size=batch_size),
         path=out,
         overwrite=overwrite,
@@ -34,8 +35,8 @@ def read_flat_fasta(
     batch_size: int,
     n_threads=1,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_files(
         FlatFASTA(name=name, fasta=fasta, batch_size=batch_size, n_threads=n_threads),
         path=out,
         overwrite=overwrite,
@@ -54,8 +55,8 @@ def read_genome_fasta(
     alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_files(
         GenomeFASTA(
             name=name,
             fasta=fasta,
@@ -86,8 +87,8 @@ def read_bam(
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_files(
         BAM(
             name=name,
             bams=bams,
@@ -121,8 +122,8 @@ def read_bigwig(
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_files(
         BigWig(
             name=name,
             bigwigs=bigwigs,
@@ -157,8 +158,8 @@ def read_vcf(
     max_jitter=0,
     overwrite=False,
     splice=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_files(
         VCF(
             name=name,
             vcf=vcf,

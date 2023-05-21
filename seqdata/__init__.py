@@ -1,6 +1,11 @@
 """Annotated sequence data"""
 
-from ._core import SeqData, concat, open_zarr
+from ._core.seqdata import (
+    add_layers_from_files,
+    from_files,
+    get_torch_dataloader,
+    open_zarr,
+)
 from ._io.read import (
     read_bam,
     read_bigwig,
@@ -13,9 +18,10 @@ from ._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from .alphabets import ALPHABETS, SequenceAlphabet
 
 __all__ = [
-    "SeqData",
-    "concat",
+    "from_files",
     "open_zarr",
+    "add_layers_from_files",
+    "get_torch_dataloader",
     "read_bam",
     "read_bigwig",
     "read_flat_fasta",

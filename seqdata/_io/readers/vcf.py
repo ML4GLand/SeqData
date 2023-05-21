@@ -252,9 +252,10 @@ class VCF(RegionReader):
                 # (samples haplotypes length)
                 batch[idx] = seq
                 if is_last_in_batch or is_last_row:
+                    _batch = batch[: idx + 1]
                     to_rc_mask = to_rc[start : start + idx + 1]
-                    batch[to_rc_mask] = self.alphabet.rev_comp_byte(batch[to_rc_mask])
-                    seqs[start : start + idx + 1] = batch[: idx + 1]
+                    _batch[to_rc_mask] = self.alphabet.rev_comp_byte(_batch[to_rc_mask])
+                    seqs[start : start + idx + 1] = _batch[: idx + 1]
 
         _vcf.close()
 

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pyBigWig
 import zarr
-from numcodecs import Blosc, Delta, VLenArray, blosc
+from numcodecs import Blosc, Delta, VLenArray, VLenUTF8, blosc
 from numpy.typing import NDArray
 from tqdm import tqdm
 
@@ -72,9 +72,10 @@ class BigWig(RegionReader, Generic[DTYPE]):
                         value = interval[2]
                         batch[idx, rel_start:rel_end] = value
                 if is_last_row or is_last_in_batch:
+                    _batch = batch[: idx + 1]
                     to_rc_mask = to_rc[start : start + idx + 1]
-                    batch[to_rc_mask] = batch[to_rc_mask, ::-1]
-                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
+                    _batch[to_rc_mask] = _batch[to_rc_mask, ::-1]
+                    coverage[start : start + idx + 1, sample_idx] = _batch
 
     def _read_bigwig_variable_length(
         self,
@@ -114,6 +115,7 @@ class BigWig(RegionReader, Generic[DTYPE]):
         bed: pd.DataFrame,
         length: Optional[int] = None,
         overwrite=False,
+        splice=False,
     ) -> None:
         if length is None:
             self._write_variable_length(out, bed, overwrite)
@@ -137,6 +139,7 @@ class BigWig(RegionReader, Generic[DTYPE]):
             data=np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
+            object_codec=VLenUTF8(),
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
@@ -157,18 +160,16 @@ class BigWig(RegionReader, Generic[DTYPE]):
 
         sample_idxs = np.arange(len(self.samples))
         tasks = [
-            joblib.delayed(
-                self._read_bigwig_fixed_length(
-                    coverage,
-                    bigwig,
-                    bed,
-                    batch_size,
-                    sample_idx,
-                    self.threads_per_job,
-                    length=length,
-                )
-                for bigwig, sample_idx in zip(self.bigwigs, sample_idxs)
+            joblib.delayed(self._read_bigwig_fixed_length)(
+                coverage,
+                bigwig,
+                bed,
+                batch_size,
+                sample_idx,
+                self.threads_per_job,
+                length=length,
             )
+            for bigwig, sample_idx in zip(self.bigwigs, sample_idxs)
         ]
         with joblib.parallel_backend(
             "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
@@ -191,6 +192,7 @@ class BigWig(RegionReader, Generic[DTYPE]):
             data=np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
+            object_codec=VLenUTF8(),
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
 
@@ -211,17 +213,15 @@ class BigWig(RegionReader, Generic[DTYPE]):
 
         sample_idxs = np.arange(len(self.samples))
         tasks = [
-            joblib.delayed(
-                self._read_bigwig_variable_length(
-                    coverage,
-                    bigwig,
-                    bed,
-                    batch_size,
-                    sample_idx,
-                    self.threads_per_job,
-                )
-                for bigwig, sample_idx in zip(self.bigwigs, sample_idxs)
+            joblib.delayed(self._read_bigwig_variable_length)(
+                coverage,
+                bigwig,
+                bed,
+                batch_size,
+                sample_idx,
+                self.threads_per_job,
             )
+            for bigwig, sample_idx in zip(self.bigwigs, sample_idxs)
         ]
         with joblib.parallel_backend(
             "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
