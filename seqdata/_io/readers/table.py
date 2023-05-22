@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import zarr
 from numcodecs import Blosc, VLenBytes
+from tqdm import tqdm
 
 from seqdata._io.utils import _df_to_xr_zarr
 from seqdata.types import FlatReader, PathType
@@ -85,6 +86,7 @@ class Table(FlatReader):
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
         z = zarr.open_group(out)
 
+        pbar = tqdm()
         first_batch = True
         for table in self.tables:
             with self._get_reader(table) as reader:
@@ -97,3 +99,4 @@ class Table(FlatReader):
                         first_batch = False
                     else:
                         self._write_batch(batch, z, first_cols, table)  # type: ignore
+                    pbar.update(len(batch))
