@@ -221,8 +221,8 @@ class BigWig(RegionReader, Generic[DTYPE]):
                 values = cast(NDArray, f.values(contig, start, end, numpy=True))
                 values[values == np.nan] = 0
                 values = values.astype(self.dtype)
-                pad_left = min(-start, 0)
-                pad_right = min(end - contig_lengths[contig], 0)
+                pad_left = max(-start, 0)
+                pad_right = max(end - contig_lengths[contig], 0)
                 values = np.concatenate(
                     [
                         np.zeros(pad_left, self.dtype),
