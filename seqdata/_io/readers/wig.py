@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Generic, List, Literal, Optional, Type, Union, cast
+from typing import Any, Dict, Generic, List, Literal, Optional, Type, Union, cast
 
 import joblib
 import numpy as np
@@ -187,15 +187,29 @@ class BigWig(RegionReader, Generic[DTYPE]):
         ):
             joblib.Parallel()(tasks)
 
-    def _reader(self, bed: pd.DataFrame, f):
+    def _reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
         for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
-            values = cast(NDArray, f.values(contig, start, end, numpy=True))
+            values = cast(
+                NDArray,
+                f.values(
+                    contig, max(0, start), min(contig_lengths[contig], end), numpy=True
+                ),
+            )
             values[values == np.nan] = 0
             values = values.astype(self.dtype)
+            pad_left = max(-start, 0)
+            pad_right = max(end - contig_lengths[contig], 0)
+            values = np.concatenate(
+                [
+                    np.zeros(pad_left, self.dtype),
+                    values,
+                    np.zeros(pad_right, self.dtype),
+                ]
+            )
             yield values
 
-    def _spliced_reader(self, bed: pd.DataFrame, f):
+    def _spliced_reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
         pbar = tqdm(total=len(bed))
         for rows in split_when(
             bed.itertuples(index=False), lambda x, y: x.name != y.name
@@ -207,6 +221,15 @@ class BigWig(RegionReader, Generic[DTYPE]):
                 values = cast(NDArray, f.values(contig, start, end, numpy=True))
                 values[values == np.nan] = 0
                 values = values.astype(self.dtype)
+                pad_left = min(-start, 0)
+                pad_right = min(end - contig_lengths[contig], 0)
+                values = np.concatenate(
+                    [
+                        np.zeros(pad_left, self.dtype),
+                        values,
+                        np.zeros(pad_right, self.dtype),
+                    ]
+                )
                 unspliced.append(values)
             yield np.concatenate(unspliced)
 
@@ -231,7 +254,8 @@ class BigWig(RegionReader, Generic[DTYPE]):
                 reader = self._spliced_reader
             else:
                 reader = self._reader
-            row_batcher = _get_row_batcher(reader(bed, f), batch_size)
+            contig_lengths = f.chroms()
+            row_batcher = _get_row_batcher(reader(bed, f, contig_lengths), batch_size)
             for is_last_row, is_last_in_batch, values, idx, start in row_batcher:
                 batch[idx] = values
                 if is_last_row or is_last_in_batch:
@@ -260,7 +284,8 @@ class BigWig(RegionReader, Generic[DTYPE]):
                 reader = self._spliced_reader
             else:
                 reader = self._reader
-            row_batcher = _get_row_batcher(reader(bed, f), batch_size)
+            contig_lengths = f.chroms()
+            row_batcher = _get_row_batcher(reader(bed, f, contig_lengths), batch_size)
             for is_last_row, is_last_in_batch, values, idx, start in row_batcher:
                 if to_rc[idx]:
                     batch[idx] = values[::-1]

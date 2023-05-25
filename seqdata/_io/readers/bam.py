@@ -198,7 +198,7 @@ class BAM(RegionReader, Generic[DTYPE]):
 
         read_cache: Dict[str, Any] = {}
 
-        for read in f.fetch(contig, start, end):
+        for read in f.fetch(contig, max(0, start), end):
             if not read.is_proper_pair or read.is_secondary:
                 continue
 
