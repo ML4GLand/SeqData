@@ -2,10 +2,11 @@ import logging
 from itertools import count, cycle
 from subprocess import CalledProcessError, run
 from textwrap import dedent
-from typing import Generator, List, Literal, Tuple
+from typing import Generator, Literal, Tuple
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import zarr
 from more_itertools import mark_ends, repeat_each
 from numcodecs import VLenArray, VLenBytes, VLenUTF8
@@ -15,7 +16,7 @@ from seqdata.alphabets import SequenceAlphabet
 from seqdata.types import T
 
 
-def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dims: List[str], **kwargs):
+def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dim: str, **kwargs):
     for name, series in df.items():
         data = series.to_numpy()
         if data.dtype.type == np.object_:
@@ -30,7 +31,25 @@ def _df_to_xr_zarr(df: pd.DataFrame, root: zarr.Group, dims: List[str], **kwargs
         else:
             object_codec = None
         arr = root.array(name, data, object_codec=object_codec, **kwargs)
-        arr.attrs["_ARRAY_DIMENSIONS"] = dims
+        arr.attrs["_ARRAY_DIMENSIONS"] = [dim]
+
+
+def _spliced_df_to_xr_zarr(df: pl.DataFrame, root: zarr.Group, dim: str, **kwargs):
+    for series in df.get_columns():
+        data = series.to_numpy()
+        if data.dtype.type == np.object_:
+            if series.dtype == pl.List:
+                object_codec = VLenArray(data[0].dtype)
+            elif series.dtype == pl.Utf8:
+                object_codec = VLenUTF8()
+            elif series.dtype == pl.Binary:
+                object_codec = VLenBytes()
+            else:
+                raise ValueError("Got column in dataframe that isn't serializable.")
+        else:
+            object_codec = None
+        arr = root.array(series.name, data, object_codec=object_codec, **kwargs)
+        arr.attrs["_ARRAY_DIMENSIONS"] = [dim]
 
 
 def _get_row_batcher(

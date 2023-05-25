@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, List, Optional, Type, Union
 
 import numpy as np
 
-from seqdata._core.seqdata import from_files
+from seqdata._core.seqdata import from_flat_files, from_region_files
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from seqdata.alphabets import SequenceAlphabet
 from seqdata.types import PathType
@@ -18,11 +18,13 @@ def read_table(
     tables: Union[PathType, List[PathType]],
     seq_col: str,
     batch_size: int,
+    fixed_length: bool,
     overwrite=False,
 ) -> "xr.Dataset":
-    sdata = from_files(
+    sdata = from_flat_files(
         Table(name=name, tables=tables, seq_col=seq_col, batch_size=batch_size),
         path=out,
+        fixed_length=fixed_length,
         overwrite=overwrite,
     )
     return sdata
@@ -33,12 +35,14 @@ def read_flat_fasta(
     out: PathType,
     fasta: PathType,
     batch_size: int,
+    fixed_length: bool,
     n_threads=1,
     overwrite=False,
 ) -> "xr.Dataset":
-    sdata = from_files(
+    sdata = from_flat_files(
         FlatFASTA(name=name, fasta=fasta, batch_size=batch_size, n_threads=n_threads),
         path=out,
+        fixed_length=fixed_length,
         overwrite=overwrite,
     )
     return sdata
@@ -50,13 +54,13 @@ def read_genome_fasta(
     fasta: PathType,
     bed: PathType,
     batch_size: int,
-    length: Optional[int] = None,
+    fixed_length: Union[int, bool],
     n_threads=1,
     alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
 ) -> "xr.Dataset":
-    sdata = from_files(
+    sdata = from_region_files(
         GenomeFASTA(
             name=name,
             fasta=fasta,
@@ -65,7 +69,7 @@ def read_genome_fasta(
             alphabet=alphabet,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
@@ -74,23 +78,33 @@ def read_genome_fasta(
 
 
 def read_bam(
-    name: str,
+    seq_name: str,
+    cov_name: str,
     out: PathType,
+    fasta: PathType,
     bams: List[PathType],
     samples: List[str],
     bed: PathType,
     batch_size: int,
-    length: Optional[int] = None,
+    fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
+    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     samples_per_chunk=10,
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
 ) -> "xr.Dataset":
-    sdata = from_files(
+    sdata = from_region_files(
+        GenomeFASTA(
+            name=seq_name,
+            fasta=fasta,
+            batch_size=batch_size,
+            n_threads=n_jobs * threads_per_job,
+            alphabet=alphabet,
+        ),
         BAM(
-            name=name,
+            name=cov_name,
             bams=bams,
             samples=samples,
             batch_size=batch_size,
@@ -100,7 +114,7 @@ def read_bam(
             dtype=dtype,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
@@ -109,23 +123,33 @@ def read_bam(
 
 
 def read_bigwig(
-    name: str,
+    seq_name: str,
+    cov_name: str,
     out: PathType,
+    fasta: PathType,
     bigwigs: List[PathType],
     samples: List[str],
     bed: PathType,
     batch_size: int,
-    length: Optional[int] = None,
+    fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
+    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
     samples_per_chunk=10,
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
 ) -> "xr.Dataset":
-    sdata = from_files(
+    sdata = from_region_files(
+        GenomeFASTA(
+            name=seq_name,
+            fasta=fasta,
+            batch_size=batch_size,
+            n_threads=n_jobs * threads_per_job,
+            alphabet=alphabet,
+        ),
         BigWig(
-            name=name,
+            name=cov_name,
             bigwigs=bigwigs,
             samples=samples,
             batch_size=batch_size,
@@ -135,7 +159,7 @@ def read_bigwig(
             dtype=dtype,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
@@ -151,7 +175,7 @@ def read_vcf(
     samples: List[str],
     bed: Union[PathType, "pd.DataFrame"],
     batch_size: int,
-    length: Optional[int] = None,
+    fixed_length: Union[int, bool],
     n_threads=1,
     samples_per_chunk=10,
     alphabet: Optional[Union[str, SequenceAlphabet]] = None,
@@ -159,7 +183,7 @@ def read_vcf(
     overwrite=False,
     splice=False,
 ) -> "xr.Dataset":
-    sdata = from_files(
+    sdata = from_region_files(
         VCF(
             name=name,
             vcf=vcf,
@@ -171,7 +195,7 @@ def read_vcf(
             alphabet=alphabet,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,

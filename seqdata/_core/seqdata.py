@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from typing import (
     Any,
@@ -12,10 +13,12 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
 )
 
 import numpy as np
 import pandas as pd
+import polars as pl
 import xarray as xr
 import zarr
 from numcodecs import Blosc
@@ -26,7 +29,7 @@ from seqdata._io.bed_ops import (
     _read_bedlike,
     _set_uniform_length_around_center,
 )
-from seqdata._io.utils import _df_to_xr_zarr
+from seqdata._io.utils import _df_to_xr_zarr, _spliced_df_to_xr_zarr
 from seqdata.types import FlatReader, PathType, RegionReader
 
 from .utils import (
@@ -90,14 +93,13 @@ def open_zarr(
     return ds
 
 
-def from_files(
-    *readers: Union[FlatReader, RegionReader],
+def from_flat_files(
+    *readers: FlatReader,
     path: PathType,
-    length: Optional[int] = None,
-    bed: Optional[Union[PathType, pd.DataFrame]] = None,
-    max_jitter=0,
+    fixed_length: bool,
+    sequence_dim: Optional[str] = None,
+    length_dim: Optional[str] = None,
     overwrite=False,
-    splice=False,
 ) -> xr.Dataset:
     """Save a SeqData to disk and open it (without loading it into memory).
 
@@ -105,75 +107,146 @@ def from_files(
     ----------
     path : str, Path
         Path to save this SeqData to.
-    length : Optional[int], optional
-        Length of regions to write. If provided, will expand/shrink bed coordinates
-        to have this length.
+    fixed_length : bool
+        `True`: assume the all sequences have the same length and will infer it
+        from the first sequence.
+
+        `False`: write variable length sequences.
+    overwrite : bool, optional
+        Whether to overwrite existing arrays of the SeqData at `path`, by default False
+
+    Returns
+    -------
+    xr.Dataset
+    """
+    sequence_dim = "_sequence" if sequence_dim is None else sequence_dim
+    if not fixed_length and length_dim is not None:
+        warnings.warn("Treating sequences as variable length, ignoring `length_dim`.")
+    elif fixed_length:
+        length_dim = "_length" if length_dim is None else length_dim
+
+    for reader in readers:
+        reader._write(
+            out=path,
+            fixed_length=fixed_length,
+            overwrite=overwrite,
+            sequence_dim=sequence_dim,
+            length_dim=length_dim,
+        )
+
+    zarr.consolidate_metadata(path)  # type: ignore
+
+    ds = open_zarr(path)
+    return ds
+
+
+def from_region_files(
+    *readers: RegionReader,
+    path: PathType,
+    fixed_length: Union[int, bool],
+    bed: Union[PathType, pd.DataFrame],
+    max_jitter=0,
+    sequence_dim: Optional[str] = None,
+    length_dim: Optional[str] = None,
+    splice=False,
+    overwrite=False,
+) -> xr.Dataset:
+    """Save a SeqData to disk and open it (without loading it into memory).
+
+    Parameters
+    ----------
+    path : str, Path
+        Path to save this SeqData to.
+    fixed_length : int, bool, optional
+        `int`: use regions of this length centered around those in the BED file.
+
+        `True`: assume the all sequences have the same length and will try to infer it
+        from the data.
+
+        `False`: write variable length sequences
     bed : str, Path, pd.DataFrame, optional
-        BED file or DataFrame matching a BED-like specification specifying what
-        regions to write.
+        BED file or DataFrame matching the BED3+ specification describing what regions
+        to write.
     max_jitter : int, optional
         How much jitter to allow for the SeqData object by writing additional
         flanking sequences, by default 0
     overwrite : bool, optional
-        Whether to overwrite any existing SeqData, by default False
+        Whether to overwrite existing arrays of the SeqData at `path`, by default False
     splice : bool, optional
-        Whether to splice together regions that have the same name, by default False
+        Whether to splice together regions that have the same `name` in the BED file, by
+        default False
 
     Returns
     -------
-    SeqData
+    xr.Dataset
     """
+    sequence_dim = "_sequence" if sequence_dim is None else sequence_dim
+    if not fixed_length and length_dim is not None:
+        warnings.warn("Treating sequences as variable length, ignoring `length_dim`.")
+    elif fixed_length:
+        length_dim = "_length" if length_dim is None else length_dim
+
     root = zarr.open_group(path)
     root.attrs["max_jitter"] = max_jitter
 
-    if bed is not None:
-        if isinstance(bed, (str, Path)):
-            _bed = _read_bedlike(bed)
+    if isinstance(bed, (str, Path)):
+        _bed = _read_bedlike(bed)
+    else:
+        _bed = bed
+
+    if not splice:
+        if fixed_length is False:
+            _expand_regions(_bed, max_jitter)
         else:
-            _bed = bed
-
-        if splice and length is not None:
-            raise ValueError("Changing length is incompatible with splicing.")
-        if splice and max_jitter > 0:
-            raise ValueError("Jitter is incompatible with splicing.")
-        if not splice:
-            if length is not None:
-                length += 2 * max_jitter
-                _set_uniform_length_around_center(_bed, length)
-            elif length is None:
-                _expand_regions(_bed, max_jitter)
-
-        if splice:
-            bed_to_write = _bed.groupby("name").agg(list).reset_index()
-        else:
-            bed_to_write = _bed
-
+            if fixed_length is True:
+                fixed_length = cast(
+                    int,
+                    _bed.loc[0, "chromEnd"] - _bed.loc[0, "chromStart"],  # type: ignore
+                )
+            fixed_length += 2 * max_jitter
+            _set_uniform_length_around_center(_bed, fixed_length)
         _df_to_xr_zarr(
-            bed_to_write,
+            _bed,
             root,
-            ["_sequence"],
+            sequence_dim,
             compressor=Blosc("zstd", clevel=7, shuffle=-1),
             overwrite=overwrite,
         )
-    elif (length is not None or max_jitter is None) and bed is None:
-        raise ValueError("Need a BED file when specifying a length.")
     else:
-        if any(map(lambda r: isinstance(r, RegionReader), readers)):
-            raise ValueError(
-                "Got readers that need a BED file, but didn't get a BED file."
+        _bed = pl.from_pandas(_bed)
+        if max_jitter > 0:
+            _bed = _bed.with_columns(
+                pl.when(pl.col("chromStart") == pl.col("chromStart").min().over("name"))
+                .then(pl.col("chromStart").min().over("name") - max_jitter)
+                .otherwise(pl.col("chromStart"))
+                .alias("chromStart"),
+                pl.when(pl.col("chromEnd") == pl.col("chromEnd").max().over("name"))
+                .then(pl.col("chromEnd").max().over("name") + max_jitter)
+                .otherwise(pl.col("chromEnd"))
+                .alias("chromEnd"),
             )
+        bed_to_write = _bed.groupby("name").agg(
+            pl.col(pl.Utf8).first(), pl.exclude(pl.Utf8)
+        )
+        _spliced_df_to_xr_zarr(
+            bed_to_write,
+            root,
+            sequence_dim,
+            compressor=Blosc("zstd", clevel=7, shuffle=-1),
+            overwrite=overwrite,
+        )
+        _bed = _bed.to_pandas()
 
     for reader in readers:
-        if isinstance(reader, FlatReader):
-            reader._write(out=path, overwrite=overwrite)
-        elif isinstance(reader, RegionReader):
-            reader._write(
-                out=path,
-                bed=_bed,  # type: ignore
-                length=length,  # type: ignore
-                overwrite=overwrite,
-                splice=splice,
-            )
+        reader._write(
+            out=path,
+            bed=_bed,
+            fixed_length=fixed_length,
+            sequence_dim=sequence_dim,
+            length_dim=length_dim,
+            overwrite=overwrite,
+            splice=splice,
+        )
 
     zarr.consolidate_metadata(path)  # type: ignore
 
@@ -212,6 +285,7 @@ def add_layers_from_files(
     path: PathType,
     overwrite=False,
 ):
+    raise NotImplementedError
     if any(map(lambda r: isinstance(r, RegionReader), readers)):
         bed = sdata[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
 
@@ -222,7 +296,8 @@ def add_layers_from_files(
                     f"""Reader "{reader.name}" has a different number of sequences 
                     than this SeqData."""
                 )
-            reader._write(out=path, overwrite=overwrite)
+            _fixed_length = fixed_length is not False
+            reader._write(out=path, fixed_length=_fixed_length, overwrite=overwrite)
         elif isinstance(reader, RegionReader):
             reader._write(
                 out=path,
@@ -251,7 +326,7 @@ def get_torch_dataloader(
     worker_init_fn=None,
     multiprocessing_context=None,
     generator=None,
-    prefetch_factor: int = 2,
+    prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
 ) -> "DataLoader[Dict[str, Any]]":
     """Get a PyTorch DataLoader for this SeqData.
@@ -276,7 +351,7 @@ def get_torch_dataloader(
     DataLoader that returns dictionaries of tensors.
     """
     if not TORCH_AVAILABLE:
-        raise ImportError("Install PyTorch to get DataLoader from SeqData.")
+        raise ImportError("Install PyTorch to get a DataLoader from SeqData.")
 
     variables_not_in_ds = set(variables) - set(sdata.data_vars.keys())
     if variables_not_in_ds:
@@ -338,6 +413,6 @@ def get_torch_dataloader(
         worker_init_fn=worker_init_fn,
         multiprocessing_context=multiprocessing_context,
         generator=generator,
-        prefetch_factor=prefetch_factor,
+        prefetch_factor=prefetch_factor,  # type: ignore
         persistent_workers=persistent_workers,
     )

@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import List, Optional, Set, Union, cast
+from typing import List, Literal, Optional, Set, Union, cast
 
 import cyvcf2
 import numpy as np
@@ -16,6 +16,9 @@ from tqdm import tqdm
 from seqdata._io.utils import _get_row_batcher
 from seqdata.alphabets import ALPHABETS, SequenceAlphabet
 from seqdata.types import PathType, RegionReader
+
+N_HAPLOTYPES = 2
+
 
 ### pysam and cyvcf2 implementation NOTE ###
 
@@ -47,6 +50,8 @@ class VCF(RegionReader):
         n_threads=1,
         samples_per_chunk=10,
         alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+        sample_dim: Optional[str] = None,
+        haplotype_dim: Optional[str] = None,
     ) -> None:
         self.name = name
         self.vcf = Path(vcf)
@@ -61,6 +66,10 @@ class VCF(RegionReader):
             self.alphabet = ALPHABETS[alphabet]
         else:
             self.alphabet = alphabet
+        self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
+        self.haplotype_dim = (
+            f"{name}_haplotype" if haplotype_dim is None else haplotype_dim
+        )
 
         with pysam.FastaFile(str(fasta)) as f:
             fasta_contigs = set(f.references)
@@ -168,61 +177,79 @@ class VCF(RegionReader):
         self,
         out: PathType,
         bed: pd.DataFrame,
-        length: Optional[int] = None,
+        fixed_length: Union[int, Literal[False]],
+        sequence_dim: str,
+        length_dim: Optional[str] = None,
         overwrite=False,
         splice=False,
     ) -> None:
-        if length is None:
+        if self.name in (sequence_dim, self.sample_dim, self.haplotype_dim, length_dim):
+            raise ValueError(
+                """Name cannot be equal to sequence_dim, sample_dim, haplotype_dim, or 
+                length_dim."""
+            )
+
+        if fixed_length is False:
             self._write_variable_length(
-                out=out, bed=bed, overwrite=overwrite, splice=splice
+                out=out,
+                bed=bed,
+                sequence_dim=sequence_dim,
+                overwrite=overwrite,
+                splice=splice,
             )
         else:
+            assert length_dim is not None
             self._write_fixed_length(
-                out=out, bed=bed, length=length, overwrite=overwrite, splice=splice
+                out=out,
+                bed=bed,
+                fixed_length=fixed_length,
+                sequence_dim=sequence_dim,
+                length_dim=length_dim,
+                overwrite=overwrite,
+                splice=splice,
             )
 
     def _write_fixed_length(
         self,
         out: PathType,
         bed: pd.DataFrame,
-        length: int,
+        fixed_length: int,
+        sequence_dim: str,
+        length_dim: str,
         overwrite: bool,
         splice: bool,
     ):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        if splice:
-            n_seqs = bed["name"].nunique()
-        else:
-            n_seqs = len(bed)
+        n_seqs = bed["name"].nunique() if splice else len(bed)
         batch_size = min(n_seqs, self.batch_size)
 
         z = zarr.open_group(out)
 
         seqs = z.empty(
             self.name,
-            shape=(n_seqs, len(self.samples), 2, length),
+            shape=(n_seqs, len(self.samples), N_HAPLOTYPES, fixed_length),
             dtype="|S1",
-            chunks=(batch_size, self.samples_per_chunk, None, None),
+            chunks=(batch_size, self.samples_per_chunk, 1, None),
             overwrite=overwrite,
             compressor=compressor,
         )
         seqs.attrs["_ARRAY_DIMENSIONS"] = [
-            "_sequence",
-            f"{self.name}_sample",
-            "haplotype",
-            f"{self.name}_length",
+            sequence_dim,
+            self.sample_dim,
+            self.haplotype_dim,
+            length_dim,
         ]
 
         arr = z.array(
-            f"{self.name}_sample",
+            self.sample_dim,
             np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
             object_codec=VLenUTF8(),
         )
-        arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
+        arr.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
 
         to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
@@ -246,9 +273,7 @@ class VCF(RegionReader):
             row_batcher = _get_row_batcher(
                 reader(bed, f, _vcf, sample_order), batch_size
             )
-            for is_last_row, is_last_in_batch, seq, idx, start in tqdm(
-                row_batcher, total=n_seqs
-            ):
+            for is_last_row, is_last_in_batch, seq, idx, start in row_batcher:
                 # (samples haplotypes length)
                 batch[idx] = seq
                 if is_last_in_batch or is_last_row:
@@ -260,42 +285,44 @@ class VCF(RegionReader):
         _vcf.close()
 
     def _write_variable_length(
-        self, out: PathType, bed: pd.DataFrame, overwrite: bool, splice: bool
+        self,
+        out: PathType,
+        bed: pd.DataFrame,
+        sequence_dim: str,
+        overwrite: bool,
+        splice: bool,
     ):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        if splice:
-            n_seqs = bed["name"].nunique()
-        else:
-            n_seqs = len(bed)
+        n_seqs = bed["name"].nunique() if splice else len(bed)
         batch_size = min(n_seqs, self.batch_size)
 
         z = zarr.open_group(out)
 
         seqs = z.empty(
             self.name,
-            shape=(n_seqs, len(self.samples), 2),
+            shape=(n_seqs, len(self.samples), N_HAPLOTYPES),
             dtype=object,
-            chunks=(batch_size, self.samples_per_chunk, None),
+            chunks=(batch_size, self.samples_per_chunk, 1),
             overwrite=overwrite,
             compressor=compressor,
             object_codec=VLenBytes(),
         )
         seqs.attrs["_ARRAY_DIMENSIONS"] = [
-            "_sequence",
-            f"{self.name}_sample",
-            "haplotype",
+            sequence_dim,
+            self.sample_dim,
+            self.haplotype_dim,
         ]
 
         arr = z.array(
-            f"{self.name}_sample",
+            self.sample_dim,
             np.array(self.samples, object),
             compressor=compressor,
             overwrite=overwrite,
             object_codec=VLenUTF8(),
         )
-        arr.attrs["_ARRAY_DIMENSIONS"] = [f"{self.name}_sample"]
+        arr.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
 
         to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
@@ -319,9 +346,7 @@ class VCF(RegionReader):
             row_batcher = _get_row_batcher(
                 reader(bed, f, _vcf, sample_order), batch_size
             )
-            for is_last_row, is_last_in_batch, seq, idx, start in tqdm(
-                row_batcher, total=n_seqs
-            ):
+            for is_last_row, is_last_in_batch, seq, idx, start in row_batcher:
                 # (samples haplotypes)
                 if to_rc[idx]:
                     seq = self.alphabet.rev_comp_byte(seq)

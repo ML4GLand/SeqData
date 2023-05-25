@@ -23,24 +23,17 @@ def _expand_regions(bed: pd.DataFrame, expansion_length: int):
     bed["chromEnd"] = bed["chromEnd"] + expansion_length
 
 
-def _read_bedlike(path: PathType):
-    """Reads a bed-like file as a pandas DataFrame. The file type is inferred from the
-    file extension.
+def _read_bedlike(path: PathType) -> pd.DataFrame:
+    """Reads a bed-like (BED3+) file as a pandas DataFrame. The file type is inferred
+    from the file extension.
 
     Parameters
     ----------
     path : PathType
-        _description_
 
     Returns
     -------
-    _type_
-        _description_
-
-    Raises
-    ------
-    ValueError
-        _description_
+    pandas.DataFrame
     """
     path = Path(path)
     if ".bed" in path.suffixes:
