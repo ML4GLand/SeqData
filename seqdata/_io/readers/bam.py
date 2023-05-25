@@ -127,7 +127,7 @@ class BAM(RegionReader, Generic[DTYPE]):
                 batch_size,
                 sample_idx,
                 self.threads_per_job,
-                length=fixed_length,
+                fixed_length=fixed_length,
                 splice=splice,
             )
             for bam, sample_idx in zip(self.bams, sample_idxs)

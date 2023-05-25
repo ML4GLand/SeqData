@@ -226,7 +226,7 @@ class BigWig(RegionReader, Generic[DTYPE]):
 
         batch = np.zeros((batch_size, fixed_length), self.dtype)
 
-        with pyBigWig.open(bigwig) as f:
+        with pyBigWig.open(str(bigwig)) as f:
             if splice:
                 reader = self._spliced_reader
             else:
@@ -255,7 +255,7 @@ class BigWig(RegionReader, Generic[DTYPE]):
 
         batch = np.empty(batch_size, object)
 
-        with pyBigWig.open(bigwig) as f:
+        with pyBigWig.open(str(bigwig)) as f:
             if splice:
                 reader = self._spliced_reader
             else:

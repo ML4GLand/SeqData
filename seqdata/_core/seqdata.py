@@ -1,7 +1,6 @@
 import warnings
 from pathlib import Path
 from typing import (
-    Any,
     Callable,
     Dict,
     Iterable,
@@ -14,6 +13,7 @@ from typing import (
     Tuple,
     Union,
     cast,
+    overload,
 )
 
 import numpy as np
@@ -26,8 +26,8 @@ from numpy.typing import NDArray
 
 from seqdata._io.bed_ops import (
     _expand_regions,
-    _read_bedlike,
     _set_uniform_length_around_center,
+    read_bedlike,
 )
 from seqdata._io.utils import _df_to_xr_zarr, _spliced_df_to_xr_zarr
 from seqdata.types import FlatReader, PathType, RegionReader
@@ -190,7 +190,7 @@ def from_region_files(
     root.attrs["max_jitter"] = max_jitter
 
     if isinstance(bed, (str, Path)):
-        _bed = _read_bedlike(bed)
+        _bed = read_bedlike(bed)
     else:
         _bed = bed
 
@@ -309,12 +309,14 @@ def add_layers_from_files(
     return ds
 
 
+@overload
 def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
-    variables: List[str],
+    variables: Union[str, List[str]],
     transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
     *,
+    return_tuples: Literal[False],
     batch_size: Optional[int] = 1,
     shuffle: bool = False,
     sampler: Optional[Union["Sampler", Iterable]] = None,
@@ -328,7 +330,81 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Dict[str, Any]]":
+) -> "DataLoader[Dict[str, torch.Tensor]]":
+    ...
+
+
+@overload
+def get_torch_dataloader(
+    sdata: xr.Dataset,
+    sample_dims: Union[str, List[str]],
+    variables: Union[str, List[str]],
+    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    *,
+    return_tuples: Literal[True],
+    batch_size: Optional[int] = 1,
+    shuffle: bool = False,
+    sampler: Optional[Union["Sampler", Iterable]] = None,
+    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    num_workers: int = 0,
+    pin_memory: bool = False,
+    drop_last: bool = False,
+    timeout: float = 0,
+    worker_init_fn=None,
+    multiprocessing_context=None,
+    generator=None,
+    prefetch_factor: Optional[int] = None,
+    persistent_workers: bool = False,
+) -> "DataLoader[Tuple[torch.Tensor, ...]]":
+    ...
+
+
+@overload
+def get_torch_dataloader(
+    sdata: xr.Dataset,
+    sample_dims: Union[str, List[str]],
+    variables: Union[str, List[str]],
+    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    *,
+    return_tuples=False,
+    batch_size: Optional[int] = 1,
+    shuffle: bool = False,
+    sampler: Optional[Union["Sampler", Iterable]] = None,
+    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    num_workers: int = 0,
+    pin_memory: bool = False,
+    drop_last: bool = False,
+    timeout: float = 0,
+    worker_init_fn=None,
+    multiprocessing_context=None,
+    generator=None,
+    prefetch_factor: Optional[int] = None,
+    persistent_workers: bool = False,
+) -> "DataLoader[Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, ...]]]":
+    ...
+
+
+def get_torch_dataloader(
+    sdata: xr.Dataset,
+    sample_dims: Union[str, List[str]],
+    variables: Union[str, List[str]],
+    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    *,
+    return_tuples=False,
+    batch_size: Optional[int] = 1,
+    shuffle=False,
+    sampler: Optional[Union["Sampler", Iterable]] = None,
+    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    num_workers=0,
+    pin_memory=False,
+    drop_last=False,
+    timeout=0.0,
+    worker_init_fn=None,
+    multiprocessing_context=None,
+    generator=None,
+    prefetch_factor: Optional[int] = None,
+    persistent_workers: bool = False,
+) -> "DataLoader[Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, ...]]]":
     """Get a PyTorch DataLoader for this SeqData.
 
     Parameters
@@ -348,7 +424,7 @@ def get_torch_dataloader(
 
     Returns
     -------
-    DataLoader that returns dictionaries of tensors.
+    DataLoader that returns dictionaries or tuples of tensors.
     """
     if not TORCH_AVAILABLE:
         raise ImportError("Install PyTorch to get a DataLoader from SeqData.")
@@ -380,12 +456,17 @@ def get_torch_dataloader(
 
     if isinstance(sample_dims, str):
         sample_dims = [sample_dims]
+    if isinstance(variables, str):
+        variables = [variables]
 
     dim_sizes = [sdata.dims[d] for d in sample_dims]
     dataset = _cartesian_product([np.arange(d) for d in dim_sizes])
 
     def collate_fn(indices: List[NDArray]):
         idx = np.vstack(indices)
+        # avoid Dask PerformanceWarning using an unsorted 1-d indexer
+        if idx.shape[-1] == 1:
+            idx = np.sort(idx, axis=None).reshape(-1, 1)
         selector = {
             d: xr.DataArray(idx[:, i], dims="batch") for i, d in enumerate(sample_dims)
         }
@@ -397,6 +478,8 @@ def get_torch_dataloader(
             k: _transforms.get(k, lambda x: torch.as_tensor(x))(arr)
             for k, arr in out.items()
         }
+        if return_tuples:
+            out_tensors = tuple(out_tensors.values())
         return out_tensors
 
     return DataLoader(

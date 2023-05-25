@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
 import pandas as pd
 import pandera as pa
 import pandera.typing as pat
@@ -14,7 +13,7 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
         center = bed["chromStart"] + bed["peak"]
     else:
         center = (bed["chromStart"] + bed["chromEnd"]) / 2
-    bed["chromStart"] = (center - length / 2).round().astype(np.uint64)
+    bed["chromStart"] = (center - length / 2).round().astype(int)
     bed["chromEnd"] = bed["chromStart"] + length
 
 
@@ -23,7 +22,7 @@ def _expand_regions(bed: pd.DataFrame, expansion_length: int):
     bed["chromEnd"] = bed["chromEnd"] + expansion_length
 
 
-def _read_bedlike(path: PathType) -> pd.DataFrame:
+def read_bedlike(path: PathType) -> pd.DataFrame:
     """Reads a bed-like (BED3+) file as a pandas DataFrame. The file type is inferred
     from the file extension.
 

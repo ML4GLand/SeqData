@@ -138,7 +138,7 @@ class GenomeFASTA(RegionReader):
     def _reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
         for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = cast(Tuple[str, int, int], row[:3])
-            seq = f.fetch(contig, start, end).encode("ascii")
+            seq = f.fetch(contig, max(0, start), end).encode("ascii")
             if (pad_len := end - start - len(seq)) > 0:
                 pad_left = start < 0
                 if pad_left:
@@ -156,7 +156,7 @@ class GenomeFASTA(RegionReader):
             for row in rows:
                 pbar.update()
                 contig, start, end = cast(Tuple[str, int, int], row[:3])
-                seq = f.fetch(contig, start, end).encode("ascii")
+                seq = f.fetch(contig, max(0, start), end).encode("ascii")
                 if (pad_len := end - start - len(seq)) > 0:
                     pad_left = start < 0
                     if pad_left:

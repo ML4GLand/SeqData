@@ -6,6 +6,7 @@ from ._core.seqdata import (
     get_torch_dataloader,
     open_zarr,
 )
+from ._io.bed_ops import read_bedlike
 from ._io.read import (
     read_bam,
     read_bigwig,
@@ -22,6 +23,7 @@ __all__ = [
     "from_region_files",
     "open_zarr",
     "get_torch_dataloader",
+    "read_bedlike",
     "read_bam",
     "read_bigwig",
     "read_flat_fasta",
