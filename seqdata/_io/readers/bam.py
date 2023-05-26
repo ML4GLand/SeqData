@@ -37,7 +37,6 @@ class BAM(RegionReader, Generic[DTYPE]):
         batch_size: int,
         n_jobs=1,
         threads_per_job=1,
-        samples_per_chunk=10,
         dtype: Union[str, Type[np.number]] = np.uint16,
         sample_dim: Optional[str] = None,
         offset_tn5=False,
@@ -51,7 +50,6 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.batch_size = batch_size
         self.n_jobs = n_jobs
         self.threads_per_job = threads_per_job
-        self.samples_per_chunk = samples_per_chunk
         self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
         self.offset_tn5 = offset_tn5
@@ -107,7 +105,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             self.name,
             shape=(len(bed), len(self.samples), fixed_length),
             dtype=self.dtype,
-            chunks=(batch_size, self.samples_per_chunk, None),
+            chunks=(batch_size, 1, None),
             overwrite=overwrite,
             compressor=compressor,
             filters=[Delta(self.dtype)],
@@ -163,7 +161,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             self.name,
             shape=(len(bed), len(self.samples)),
             dtype=object,
-            chunks=(batch_size, self.samples_per_chunk),
+            chunks=(batch_size, 1),
             overwrite=overwrite,
             compressor=compressor,
             filters=[Delta(self.dtype)],
