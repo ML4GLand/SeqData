@@ -10,20 +10,20 @@ from numcodecs import Blosc, VLenBytes
 from tqdm import tqdm
 
 from seqdata._io.utils import _df_to_xr_zarr
-from seqdata.types import FlatReader, PathType
+from seqdata.types import FlatReader, ListPathType, PathType
 
 
 class Table(FlatReader):
     def __init__(
         self,
         name: str,
-        tables: Union[PathType, List[PathType]],
+        tables: Union[PathType, ListPathType],
         seq_col: str,
         batch_size: int,
     ) -> None:
         self.name = name
         if not isinstance(tables, list):
-            tables = [tables]
+            tables = [Path(tables)]
         self.tables = list(map(Path, tables))
         self.seq_col = seq_col
         self.batch_size = batch_size

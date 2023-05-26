@@ -5,7 +5,7 @@ import numpy as np
 from seqdata._core.seqdata import from_flat_files, from_region_files
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from seqdata.alphabets import SequenceAlphabet
-from seqdata.types import PathType
+from seqdata.types import ListPathType, PathType
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 def read_table(
     name: str,
     out: PathType,
-    tables: Union[PathType, List[PathType]],
+    tables: Union[PathType, ListPathType],
     seq_col: str,
     batch_size: int,
     fixed_length: bool,
@@ -82,7 +82,7 @@ def read_bam(
     cov_name: str,
     out: PathType,
     fasta: PathType,
-    bams: List[PathType],
+    bams: ListPathType,
     samples: List[str],
     bed: PathType,
     batch_size: int,
@@ -127,7 +127,7 @@ def read_bigwig(
     cov_name: str,
     out: PathType,
     fasta: PathType,
-    bigwigs: List[PathType],
+    bigwigs: ListPathType,
     samples: List[str],
     bed: PathType,
     batch_size: int,

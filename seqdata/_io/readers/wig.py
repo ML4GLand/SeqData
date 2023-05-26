@@ -12,14 +12,14 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from seqdata._io.utils import _get_row_batcher
-from seqdata.types import DTYPE, PathType, RegionReader
+from seqdata.types import DTYPE, ListPathType, PathType, RegionReader
 
 
 class BigWig(RegionReader, Generic[DTYPE]):
     def __init__(
         self,
         name: str,
-        bigwigs: List[PathType],
+        bigwigs: ListPathType,
         samples: List[str],
         batch_size: int,
         n_jobs=1,

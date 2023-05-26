@@ -170,11 +170,15 @@ def from_region_files(
     max_jitter : int, optional
         How much jitter to allow for the SeqData object by writing additional
         flanking sequences, by default 0
-    overwrite : bool, optional
-        Whether to overwrite existing arrays of the SeqData at `path`, by default False
+    sequence_dim : str, optional
+        Name of sequence dimension. Defaults to "_sequence".
+    length_dim : str, optional
+        Name of length dimension. Defaults to "_length".
     splice : bool, optional
         Whether to splice together regions that have the same `name` in the BED file, by
         default False
+    overwrite : bool, optional
+        Whether to overwrite existing arrays of the SeqData at `path`, by default False
 
     Returns
     -------

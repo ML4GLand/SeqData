@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Optional, TypeVar, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, TypeVar, Union
 
 import numpy as np
 
@@ -8,6 +8,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
 PathType = Union[str, Path]
+ListPathType = Union[List[str], List[Path]]
 T = TypeVar("T")
 DTYPE = TypeVar("DTYPE", bound=np.generic, covariant=True)
 
