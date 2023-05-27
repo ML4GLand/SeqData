@@ -1,8 +1,10 @@
 import warnings
 from pathlib import Path
 from typing import (
+    Any,
     Callable,
     Dict,
+    Hashable,
     Iterable,
     List,
     Literal,
@@ -91,6 +93,40 @@ def open_zarr(
         **kwargs,
     )
     return ds
+
+
+def to_zarr(
+    sdata: xr.Dataset,
+    store: PathType,
+    chunk_store: Optional[Union[MutableMapping, PathType]] = None,
+    mode: Optional[Literal["w", "w-", "a", "r+"]] = None,
+    synchronizer: Optional[Any] = None,
+    group: Optional[str] = None,
+    encoding: Optional[Dict] = None,
+    compute=True,
+    consolidated: Optional[bool] = None,
+    append_dim: Optional[Hashable] = None,
+    region: Optional[Dict] = None,
+    safe_chunks=True,
+    storage_options: Optional[Dict] = None,
+    zarr_version: Optional[int] = None,
+):
+    sdata.reset_encoding()
+    sdata.to_zarr(
+        store=store,
+        chunk_store=chunk_store,
+        mode=mode,
+        synchronizer=synchronizer,
+        group=group,
+        encoding=encoding,
+        compute=compute,  # type: ignore
+        consolidated=consolidated,
+        append_dim=append_dim,
+        region=region,
+        safe_chunks=safe_chunks,
+        storage_options=storage_options,
+        zarr_version=zarr_version,
+    )
 
 
 def from_flat_files(
@@ -192,6 +228,8 @@ def from_region_files(
 
     root = zarr.open_group(path)
     root.attrs["max_jitter"] = max_jitter
+    root.attrs["sequence_dim"] = sequence_dim
+    root.attrs["length_dim"] = length_dim
 
     if isinstance(bed, (str, Path)):
         _bed = read_bedlike(bed)
@@ -265,7 +303,7 @@ class SeqDataAccessor:
 
     @property
     def obs(self):
-        return _filter_by_exact_dims(self._ds, "_sequence")
+        return _filter_by_exact_dims(self._ds, self._ds.attrs["sequence_dim"])
 
     @property
     def layers(self):
@@ -273,7 +311,9 @@ class SeqDataAccessor:
 
     @property
     def obsp(self):
-        return _filter_by_exact_dims(self._ds, ("_sequence", "_sequence"))
+        return _filter_by_exact_dims(
+            self._ds, (self._ds.attrs["sequence_dim"], self._ds.attrs["sequence_dim"])
+        )
 
     @property
     def uns(self):

@@ -3,6 +3,7 @@ from typing import List, Literal, Optional, Tuple, Union, cast
 import numpy as np
 import pandas as pd
 import pysam
+import seqpro as sp
 import zarr
 from more_itertools import split_when
 from numcodecs import Blosc, VLenBytes, VLenUTF8, blosc
@@ -10,7 +11,6 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from seqdata._io.utils import _get_row_batcher
-from seqdata.alphabets import ALPHABETS, SequenceAlphabet
 from seqdata.types import FlatReader, PathType, RegionReader
 
 ### pysam and cyvcf2 implementation NOTE ###
@@ -122,16 +122,16 @@ class GenomeFASTA(RegionReader):
         fasta: PathType,
         batch_size: int,
         n_threads: int = 1,
-        alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+        alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     ) -> None:
         self.name = name
         self.fasta = fasta
         self.batch_size = batch_size
         self.n_threads = n_threads
         if alphabet is None:
-            self.alphabet = ALPHABETS["DNA"]
+            self.alphabet = sp.ALPHABETS["DNA"]
         elif isinstance(alphabet, str):
-            self.alphabet = ALPHABETS[alphabet]
+            self.alphabet = sp.ALPHABETS[alphabet]
         else:
             self.alphabet = alphabet
 
@@ -246,7 +246,9 @@ class GenomeFASTA(RegionReader):
                 if is_last_in_batch or is_last_row:
                     _batch = batch[: idx + 1]
                     to_rc_mask = to_rc[start : start + idx + 1]
-                    _batch[to_rc_mask] = self.alphabet.rev_comp_byte(_batch[to_rc_mask])
+                    _batch[to_rc_mask] = self.alphabet.rev_comp_byte(
+                        _batch[to_rc_mask], length_axis=-1
+                    )
                     seqs[start : start + idx + 1] = _batch
 
     def _write_variable_length(

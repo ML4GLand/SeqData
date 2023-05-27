@@ -23,8 +23,8 @@ def _filter_layers(ds: xr.Dataset):
     for name, arr in ds.data_vars.items():
         if (
             len(arr.dims) > 1
-            and arr.dims[0] == "_sequence"
-            and arr.dims[1] != "_sequence"
+            and arr.dims[0] == ds.attrs["sequence_dim"]
+            and arr.dims[1] != ds.attrs["sequence_dim"]
         ):
             selector.append(name)
     return ds[selector]
@@ -33,7 +33,7 @@ def _filter_layers(ds: xr.Dataset):
 def _filter_uns(ds: xr.Dataset):
     selector = []
     for name, arr in ds.data_vars.items():
-        if "_sequence" not in arr.dims:
+        if ds.attrs["sequence_dim"] not in arr.dims:
             selector.append(name)
     return ds[selector]
 

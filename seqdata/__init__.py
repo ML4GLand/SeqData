@@ -6,7 +6,11 @@ from ._core.seqdata import (
     get_torch_dataloader,
     open_zarr,
 )
-from ._io.bed_ops import read_bedlike
+from ._io.bed_ops import (
+    add_bed_to_sdata,
+    mark_sequences_for_classification,
+    read_bedlike,
+)
 from ._io.read import (
     read_bam,
     read_bigwig,
@@ -16,7 +20,6 @@ from ._io.read import (
     read_vcf,
 )
 from ._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
-from .alphabets import ALPHABETS, SequenceAlphabet
 
 __all__ = [
     "from_flat_files",
@@ -36,6 +39,6 @@ __all__ = [
     "FlatFASTA",
     "GenomeFASTA",
     "Table",
-    "SequenceAlphabet",
-    "ALPHABETS",
+    "add_bed_to_sdata",
+    "mark_sequences_for_classification",
 ]

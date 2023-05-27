@@ -6,6 +6,7 @@ import cyvcf2
 import numpy as np
 import pandas as pd
 import pysam
+import seqpro as sp
 import zarr
 from more_itertools import split_when
 from natsort import natsorted
@@ -14,7 +15,6 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from seqdata._io.utils import _get_row_batcher
-from seqdata.alphabets import ALPHABETS, SequenceAlphabet
 from seqdata.types import PathType, RegionReader
 
 N_HAPLOTYPES = 2
@@ -49,7 +49,7 @@ class VCF(RegionReader):
         batch_size: int,
         n_threads=1,
         samples_per_chunk=10,
-        alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+        alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
         sample_dim: Optional[str] = None,
         haplotype_dim: Optional[str] = None,
     ) -> None:
@@ -61,9 +61,9 @@ class VCF(RegionReader):
         self.n_threads = n_threads
         self.samples_per_chunk = samples_per_chunk
         if alphabet is None:
-            self.alphabet = ALPHABETS["DNA"]
+            self.alphabet = sp.ALPHABETS["DNA"]
         elif isinstance(alphabet, str):
-            self.alphabet = ALPHABETS[alphabet]
+            self.alphabet = sp.ALPHABETS[alphabet]
         else:
             self.alphabet = alphabet
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
@@ -279,7 +279,9 @@ class VCF(RegionReader):
                 if is_last_in_batch or is_last_row:
                     _batch = batch[: idx + 1]
                     to_rc_mask = to_rc[start : start + idx + 1]
-                    _batch[to_rc_mask] = self.alphabet.rev_comp_byte(_batch[to_rc_mask])
+                    _batch[to_rc_mask] = self.alphabet.rev_comp_byte(
+                        _batch[to_rc_mask], length_axis=-1
+                    )
                     seqs[start : start + idx + 1] = _batch[: idx + 1]
 
         _vcf.close()
@@ -347,9 +349,10 @@ class VCF(RegionReader):
                 reader(bed, f, _vcf, sample_order), batch_size
             )
             for is_last_row, is_last_in_batch, seq, idx, start in row_batcher:
-                # (samples haplotypes)
+                # (samples haplotypes length)
                 if to_rc[idx]:
-                    seq = self.alphabet.rev_comp_byte(seq)
+                    seq = self.alphabet.rev_comp_byte(seq, length_axis=-1)
+                # (samples haplotypes)
                 batch[idx] = seq.view(f"|S{seq.shape[-1]}").squeeze().astype(object)
                 if is_last_in_batch or is_last_row:
                     seqs[start : start + idx + 1] = batch[: idx + 1]
@@ -374,7 +377,7 @@ class VCF(RegionReader):
             # (samples haplotypes length)
             for i, seqs in enumerate(reader(bed, f, _vcf, sample_order)):
                 if to_rc[i]:
-                    seqs = self.alphabet.rev_comp_byte(seqs)
+                    seqs = self.alphabet.rev_comp_byte(seqs, length_axis=-1)
                 seqs = seqs.view(f"|S{seqs.shape[-1]}")
                 for seq in seqs.ravel():
                     yield seq

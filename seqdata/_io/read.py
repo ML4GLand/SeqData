@@ -1,10 +1,10 @@
 from typing import TYPE_CHECKING, List, Optional, Type, Union
 
 import numpy as np
+import seqpro as sp
 
 from seqdata._core.seqdata import from_flat_files, from_region_files
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
-from seqdata.alphabets import SequenceAlphabet
 from seqdata.types import ListPathType, PathType
 
 if TYPE_CHECKING:
@@ -56,7 +56,7 @@ def read_genome_fasta(
     batch_size: int,
     fixed_length: Union[int, bool],
     n_threads=1,
-    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
 ) -> "xr.Dataset":
@@ -89,7 +89,7 @@ def read_bam(
     fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
-    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
@@ -132,7 +132,7 @@ def read_bigwig(
     fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
-    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
@@ -174,7 +174,7 @@ def read_vcf(
     fixed_length: Union[int, bool],
     n_threads=1,
     samples_per_chunk=10,
-    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
     splice=False,

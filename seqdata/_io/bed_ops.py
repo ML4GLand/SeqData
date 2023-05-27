@@ -1,9 +1,12 @@
 from pathlib import Path
-from typing import Optional
+from typing import List, Literal, Optional, Union
 
 import pandas as pd
 import pandera as pa
 import pandera.typing as pat
+import polars as pl
+import xarray as xr
+from pybedtools import BedTool
 
 from seqdata.types import PathType
 
@@ -20,6 +23,87 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
 def _expand_regions(bed: pd.DataFrame, expansion_length: int):
     bed["chromStart"] = bed["chromStart"] - expansion_length
     bed["chromEnd"] = bed["chromEnd"] + expansion_length
+
+
+def add_bed_to_sdata(
+    sdata: xr.Dataset,
+    bed: pd.DataFrame,
+    col_prefix: Optional[str] = None,
+    sequence_dim: Optional[str] = None,
+):
+    if col_prefix is not None:
+        bed.columns = [col_prefix + c for c in bed.columns]
+    if sequence_dim is not None:
+        bed.index.name = sequence_dim
+    return sdata.merge(bed.to_xarray())
+
+
+def mark_sequences_for_classification(
+    sdata: xr.Dataset,
+    targets: Union[pd.DataFrame, List[str]],
+    mode: Literal["binary", "multitask"],
+):
+    """Mark sequences for binary or multitask classification based on whether they
+    intersect with another set of regions.
+
+    Parameters
+    ----------
+    sdata : xr.Dataset
+    targets : Union[pd.DataFrame, List[str]]
+        Either a DataFrame with at least columns ['chrom', 'chromStart', 'chromEnd',
+        'name'], or a list of variable names in `sdata` to use that correspond to the
+        ['chrom', 'chromStart', 'chromEnd', 'name'] columns, in that order. This is
+        useful if, for example, another set of regions is already in the `sdata` object
+        under a different set of column names.
+    mode : Literal["binary", "multitask"]
+        Whether to mark regions for binary (intersects with any of the target regions)
+        or multitask classification (which target region does it intersect with?).
+    """
+    bed1 = BedTool.from_dataframe(
+        sdata[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
+    )
+
+    if isinstance(targets, pd.DataFrame):
+        bed2 = BedTool.from_dataframe(targets)
+    elif isinstance(targets, list):
+        bed2 = BedTool.from_dataframe(sdata[targets].to_dataframe())
+
+    if mode == "binary":
+        labels = (
+            pl.read_csv(
+                bed1.intersect(bed2, c=True).fn,  # type: ignore
+                separator="\t",
+                has_header=False,
+                columns=[0, 1, 2, 3],
+                new_columns=["chrom", "chromStart", "chromEnd", "label"],
+            )
+            .with_columns((pl.col("label") > 0).cast(pl.UInt8))["label"]
+            .to_numpy()
+        )
+        sdata["label"] = xr.DataArray(labels, dims=sdata.attrs["sequence_dim"])
+    elif mode == "multitask":
+        labels = (
+            pl.read_csv(
+                bed1.intersect(bed2, loj=True).fn,  # type: ignore
+                separator="\t",
+                has_header=False,
+                columns=[0, 1, 2, 6],
+                new_columns=["chrom", "start", "end", "label"],
+            )
+            .to_dummies("label")
+            .drop("label_.")
+            .groupby("chrom", "start", "end", maintain_order=True)
+            .agg(pl.exclude(r"^label.*$").first(), pl.col(r"^label.*$").max())
+            .select(r"^label.*$")  # (sequences labels)
+        )
+        label_names = xr.DataArray(
+            [c.split("_", 1)[1] for c in labels.columns], dims="_label"
+        )
+        sdata["label"] = xr.DataArray(
+            labels.to_numpy(),
+            coords=[label_names],
+            dims=[sdata.attrs["sequence_dim"], "_label"],
+        )
 
 
 def read_bedlike(path: PathType) -> pd.DataFrame:
