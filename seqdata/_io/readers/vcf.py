@@ -61,9 +61,9 @@ class VCF(RegionReader):
         self.n_threads = n_threads
         self.samples_per_chunk = samples_per_chunk
         if alphabet is None:
-            self.alphabet = sp.ALPHABETS["DNA"]
+            self.alphabet = sp.alphabets.DNA
         elif isinstance(alphabet, str):
-            self.alphabet = sp.ALPHABETS[alphabet]
+            self.alphabet = getattr(sp.alphabets, alphabet)
         else:
             self.alphabet = alphabet
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim

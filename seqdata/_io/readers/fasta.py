@@ -129,9 +129,9 @@ class GenomeFASTA(RegionReader):
         self.batch_size = batch_size
         self.n_threads = n_threads
         if alphabet is None:
-            self.alphabet = sp.ALPHABETS["DNA"]
+            self.alphabet = sp.alphabets.DNA
         elif isinstance(alphabet, str):
-            self.alphabet = sp.ALPHABETS[alphabet]
+            self.alphabet = getattr(sp.alphabets, alphabet)
         else:
             self.alphabet = alphabet
 
