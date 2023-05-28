@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from typing import List, Literal, Optional, Union
 
@@ -42,7 +43,8 @@ def mark_sequences_for_classification(
     sdata: xr.Dataset,
     targets: Union[pd.DataFrame, List[str]],
     mode: Literal["binary", "multitask"],
-):
+    label_dim: Optional[str] = None,
+) -> xr.DataArray:
     """Mark sequences for binary or multitask classification based on whether they
     intersect with another set of regions.
 
@@ -58,6 +60,8 @@ def mark_sequences_for_classification(
     mode : Literal["binary", "multitask"]
         Whether to mark regions for binary (intersects with any of the target regions)
         or multitask classification (which target region does it intersect with?).
+    label_dim : str, optional
+        Name of the label dimension. Only needed for multitask classification.
     """
     bed1 = BedTool.from_dataframe(
         sdata[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
@@ -69,40 +73,51 @@ def mark_sequences_for_classification(
         bed2 = BedTool.from_dataframe(sdata[targets].to_dataframe())
 
     if mode == "binary":
+        if label_dim is not None:
+            warnings.warn("Ignoring `label_dim` for binary classification.")
+        res = bed1.intersect(bed2, c=True)  # type: ignore
+        with open(res.fn) as f:
+            n_cols = len(f.readline().split("\t"))
         labels = (
             pl.read_csv(
-                bed1.intersect(bed2, c=True).fn,  # type: ignore
+                res.fn,
                 separator="\t",
                 has_header=False,
-                columns=[0, 1, 2, 3],
+                columns=[0, 1, 2, n_cols - 1],
                 new_columns=["chrom", "chromStart", "chromEnd", "label"],
             )
             .with_columns((pl.col("label") > 0).cast(pl.UInt8))["label"]
             .to_numpy()
         )
-        sdata["label"] = xr.DataArray(labels, dims=sdata.attrs["sequence_dim"])
+        return xr.DataArray(labels, dims=sdata.attrs["sequence_dim"])
     elif mode == "multitask":
+        if label_dim is None:
+            raise ValueError(
+                """Need a name for the label dimension when generating labels for 
+                multitask classification."""
+            )
+        res = bed1.intersect(bed2, loj=True)  # type: ignore
         labels = (
             pl.read_csv(
-                bed1.intersect(bed2, loj=True).fn,  # type: ignore
+                res.fn,
                 separator="\t",
                 has_header=False,
-                columns=[0, 1, 2, 6],
-                new_columns=["chrom", "start", "end", "label"],
+                columns=[0, 1, 2, 7],
+                new_columns=["chrom", "chromStart", "chromEnd", "label"],
             )
             .to_dummies("label")
-            .drop("label_.")
-            .groupby("chrom", "start", "end", maintain_order=True)
+            .select(pl.exclude(r"^label_\.$"))
+            .groupby("chrom", "chromStart", "chromEnd", maintain_order=True)
             .agg(pl.exclude(r"^label.*$").first(), pl.col(r"^label.*$").max())
             .select(r"^label.*$")  # (sequences labels)
         )
         label_names = xr.DataArray(
-            [c.split("_", 1)[1] for c in labels.columns], dims="_label"
+            [c.split("_", 1)[1] for c in labels.columns], dims=label_dim
         )
-        sdata["label"] = xr.DataArray(
+        return xr.DataArray(
             labels.to_numpy(),
-            coords=[label_names],
-            dims=[sdata.attrs["sequence_dim"], "_label"],
+            coords={label_dim: label_names},
+            dims=[sdata.attrs["sequence_dim"], label_dim],
         )
 
 
@@ -136,15 +151,17 @@ class BEDSchema(pa.DataFrameModel):
     chrom: pat.Series[pa.Category]
     chromStart: pat.Series[int]
     chromEnd: pat.Series[int]
-    name: Optional[pat.Series[str]]
-    score: Optional[pat.Series[float]]
-    strand: Optional[pat.Series[pa.Category]] = pa.Field(isin=["+", "-", "."])
-    thickStart: Optional[pat.Series[int]]
-    thickEnd: Optional[pat.Series[int]]
-    itemRgb: Optional[pat.Series[str]]
-    blockCount: Optional[pat.Series[pa.UInt]]
-    blockSizes: Optional[pat.Series[str]]
-    blockStarts: Optional[pat.Series[str]]
+    name: Optional[pat.Series[str]] = pa.Field(nullable=True)
+    score: Optional[pat.Series[float]] = pa.Field(nullable=True)
+    strand: Optional[pat.Series[pa.Category]] = pa.Field(
+        isin=["+", "-", "."], nullable=True
+    )
+    thickStart: Optional[pat.Series[int]] = pa.Field(nullable=True)
+    thickEnd: Optional[pat.Series[int]] = pa.Field(nullable=True)
+    itemRgb: Optional[pat.Series[str]] = pa.Field(nullable=True)
+    blockCount: Optional[pat.Series[pa.UInt]] = pa.Field(nullable=True)
+    blockSizes: Optional[pat.Series[str]] = pa.Field(nullable=True)
+    blockStarts: Optional[pat.Series[str]] = pa.Field(nullable=True)
 
     class Config:
         coerce = True
@@ -176,6 +193,7 @@ def _read_bed(bed_path: PathType):
         skiprows=lambda x: x in ["track", "browser"],
         names=bed_cols[:n_cols],
         dtype={"chrom": str, "name": str},
+        na_values=".",
     )
     if "strand" not in bed:
         bed["strand"] = "+"
@@ -187,13 +205,13 @@ class NarrowPeakSchema(pa.DataFrameModel):
     chrom: pat.Series[pa.Category]
     chromStart: pat.Series[int]
     chromEnd: pat.Series[int]
-    name: pat.Series[str]
-    score: pat.Series[float]
-    strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."])
-    signalValue: pat.Series[float]
-    pValue: pat.Series[float]
-    qValue: pat.Series[float]
-    peak: pat.Series[int]
+    name: pat.Series[str] = pa.Field(nullable=True)
+    score: pat.Series[float] = pa.Field(nullable=True)
+    strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."], nullable=True)
+    signalValue: pat.Series[float] = pa.Field(nullable=True)
+    pValue: pat.Series[float] = pa.Field(nullable=True)
+    qValue: pat.Series[float] = pa.Field(nullable=True)
+    peak: pat.Series[int] = pa.Field(nullable=True)
 
     class Config:
         coerce = True
@@ -227,12 +245,12 @@ class BroadPeakSchema(pa.DataFrameModel):
     chrom: pat.Series[pa.Category]
     chromStart: pat.Series[int]
     chromEnd: pat.Series[int]
-    name: pat.Series[str]
-    score: pat.Series[float]
-    strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."])
-    signalValue: pat.Series[float]
-    pValue: pat.Series[float]
-    qValue: pat.Series[float]
+    name: pat.Series[str] = pa.Field(nullable=True)
+    score: pat.Series[float] = pa.Field(nullable=True)
+    strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."], nullable=True)
+    signalValue: pat.Series[float] = pa.Field(nullable=True)
+    pValue: pat.Series[float] = pa.Field(nullable=True)
+    qValue: pat.Series[float] = pa.Field(nullable=True)
 
     class Config:
         coerce = True

@@ -3,84 +3,11 @@
 
 <img src="docs/_static/SeqData_only_v2.png" alt="SeqData Logo" width=350>
 
-# SeqData -- Annotated DNA/RNA sequence data
+# SeqData -- Annotated biological sequence data
 
-```python
-import seqdata as sd
-```
+## Installation
 
-# Core functionality
-
-## Sequence I/O
-SeqData is designed to handle two major types of data
-
-1. Actual string sequences with annotations
-Loaded from FASTA or TSV files
-```python
-sdata = sd.read_fasta()
-sdata = sd.read_tsv()
-```
-
-2. Genomic intervals with annotations
-Loaded from bed files
-```python
-sdata = sd.read_bed()
-sdata
-```
-
-3. SeqData on disk representation
-h5
-```python
-sdata.write_h5sd()
-sd.read_h5sd()
-```
-
-## Sequence analysis
-
-### Calculate sequence properties (e.g. GC content)
-
-### Visaulize sequence properties
-
-### Motif analysis with [MotifData](https://github.com/ML4GLand/MotifData)
-
-  - Perform HOMER motif analysis
-  - Perform MEME motif analysis
-  - Perform DEM (Cluster-buster based) motif analysis
-  - Perform cisTarget
-        
-## Sequence preprocessing
-
-### Encoding sequences
-  
-  - one-hot encodings (multiple orders)
-  - k-mer frequencies (full and gapped k-mers)
-  
-## Sequence annotations
-
-### Overlap with known genomic features
-  - Known genomic features
-  - Overlap with different epigenomics data
-
-# Tutorials
-
-## Preparing sequences for sequence-to-function models
-
-## Preparing features for MPRA activity prediction
-
-## Motif enrichment analysis with HOMER/DEM/cisTarget (coming soon)
-
-# Requirements
-
-```bash
-python
-numpy
-pandas
-matplotlib
-seaborn
-pyranges
-logomaker
-pybedtools
-```
-
-# References
-1. 
+1. Clone this repo
+2. Use the `environment.yml` file to install explicit dependencies
+3. Install [SeqPro](https://github.com/ML4GLand/SeqPro)
+4. Install PyTorch as an optional dependency -- enables use of `seqdata.get_torch_dataloader` to get DataLoaders from `xarray.Datasets` (i.e. SeqData objects).
