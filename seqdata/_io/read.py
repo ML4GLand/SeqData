@@ -3,9 +3,9 @@ from typing import TYPE_CHECKING, List, Optional, Type, Union
 import numpy as np
 import seqpro as sp
 
-from seqdata._core.seqdata import from_flat_files, from_region_files
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from seqdata.types import ListPathType, PathType
+from seqdata.xarray.seqdata import from_flat_files, from_region_files
 
 if TYPE_CHECKING:
     import pandas as pd
