@@ -31,7 +31,7 @@ from seqdata._io.bed_ops import (
     _set_uniform_length_around_center,
     read_bedlike,
 )
-from seqdata._io.utils import _df_to_xr_zarr, _spliced_df_to_xr_zarr
+from seqdata._io.utils import _polars_df_to_xr_zarr
 from seqdata.types import FlatReader, PathType, RegionReader
 
 from .utils import (
@@ -112,6 +112,26 @@ def to_zarr(
     zarr_version: Optional[int] = None,
 ):
     sdata.reset_encoding()
+
+    # rechunk non-uniform chunking
+    # Use chunk size that is:
+    # 1. most frequent
+    # 2. to break ties, largest
+    for arr in sdata.data_vars.values():
+        if arr.chunksizes is not None:
+            new_chunks = {}
+            chunk: Tuple[int, ...]
+            for dim, chunk in arr.chunksizes:
+                if len(chunk) > 1 and (
+                    (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
+                ):
+                    chunks, counts = np.unique(chunk, return_counts=True)
+                    chunk_size = chunks[counts == counts.max()].max()
+                    new_chunks[dim] = chunk_size
+                else:
+                    new_chunks[dim] = chunk
+            arr.chunk(new_chunks)
+
     sdata.to_zarr(
         store=store,
         chunk_store=chunk_store,
@@ -247,8 +267,8 @@ def from_region_files(
                 )
             fixed_length += 2 * max_jitter
             _set_uniform_length_around_center(_bed, fixed_length)
-        _df_to_xr_zarr(
-            _bed,
+        _polars_df_to_xr_zarr(
+            pl.from_pandas(_bed),
             root,
             sequence_dim,
             compressor=Blosc("zstd", clevel=7, shuffle=-1),
@@ -270,7 +290,7 @@ def from_region_files(
         bed_to_write = _bed.groupby("name").agg(
             pl.col(pl.Utf8).first(), pl.exclude(pl.Utf8)
         )
-        _spliced_df_to_xr_zarr(
+        _polars_df_to_xr_zarr(
             bed_to_write,
             root,
             sequence_dim,

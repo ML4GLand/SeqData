@@ -148,14 +148,12 @@ def read_bedlike(path: PathType) -> pd.DataFrame:
 
 
 class BEDSchema(pa.DataFrameModel):
-    chrom: pat.Series[pa.Category]
+    chrom: pat.Series[str]
     chromStart: pat.Series[int]
     chromEnd: pat.Series[int]
     name: Optional[pat.Series[str]] = pa.Field(nullable=True)
     score: Optional[pat.Series[float]] = pa.Field(nullable=True)
-    strand: Optional[pat.Series[pa.Category]] = pa.Field(
-        isin=["+", "-", "."], nullable=True
-    )
+    strand: Optional[pat.Series[str]] = pa.Field(isin=["+", "-", "."], nullable=True)
     thickStart: Optional[pat.Series[int]] = pa.Field(nullable=True)
     thickEnd: Optional[pat.Series[int]] = pa.Field(nullable=True)
     itemRgb: Optional[pat.Series[str]] = pa.Field(nullable=True)
@@ -169,8 +167,9 @@ class BEDSchema(pa.DataFrameModel):
 
 def _read_bed(bed_path: PathType):
     with open(bed_path) as f:
+        skip_rows = 0
         while (line := f.readline()).startswith(("track", "browser")):
-            continue
+            skip_rows += 1
     n_cols = line.count("\t") + 1
     bed_cols = [
         "chrom",
@@ -186,15 +185,15 @@ def _read_bed(bed_path: PathType):
         "blockSizes",
         "blockStarts",
     ]
-    bed = pd.read_csv(
+    bed = pl.read_csv(
         bed_path,
-        sep="\t",
-        header=None,
-        skiprows=lambda x: x in ["track", "browser"],
-        names=bed_cols[:n_cols],
-        dtype={"chrom": str, "name": str},
-        na_values=".",
-    )
+        separator="\t",
+        has_header=False,
+        skip_rows=skip_rows,
+        new_columns=bed_cols[:n_cols],
+        dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+        null_values=".",
+    ).to_pandas()
     if "strand" not in bed:
         bed["strand"] = "+"
     bed = BEDSchema.to_schema()(bed)
@@ -202,12 +201,12 @@ def _read_bed(bed_path: PathType):
 
 
 class NarrowPeakSchema(pa.DataFrameModel):
-    chrom: pat.Series[pa.Category]
+    chrom: pat.Series[str]
     chromStart: pat.Series[int]
     chromEnd: pat.Series[int]
     name: pat.Series[str] = pa.Field(nullable=True)
     score: pat.Series[float] = pa.Field(nullable=True)
-    strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."], nullable=True)
+    strand: pat.Series[str] = pa.Field(isin=["+", "-", "."], nullable=True)
     signalValue: pat.Series[float] = pa.Field(nullable=True)
     pValue: pat.Series[float] = pa.Field(nullable=True)
     qValue: pat.Series[float] = pa.Field(nullable=True)
@@ -218,12 +217,16 @@ class NarrowPeakSchema(pa.DataFrameModel):
 
 
 def _read_narrowpeak(narrowpeak_path: PathType) -> pd.DataFrame:
-    narrowpeaks = pd.read_csv(
+    with open(narrowpeak_path) as f:
+        skip_rows = 0
+        while f.readline().startswith(("track", "browser")):
+            skip_rows += 1
+    narrowpeaks = pl.read_csv(
         narrowpeak_path,
-        sep="\t",
-        header=None,
-        skiprows=lambda x: x in ["track", "browser"],
-        names=[
+        separator="\t",
+        has_header=False,
+        skip_rows=skip_rows,
+        new_columns=[
             "chrom",
             "chromStart",
             "chromEnd",
@@ -235,19 +238,19 @@ def _read_narrowpeak(narrowpeak_path: PathType) -> pd.DataFrame:
             "qValue",
             "peak",
         ],
-        dtype={"chrom": str, "name": str},
-    )
+        dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+    ).to_pandas()
     narrowpeaks = NarrowPeakSchema.to_schema()(narrowpeaks)
     return narrowpeaks
 
 
 class BroadPeakSchema(pa.DataFrameModel):
-    chrom: pat.Series[pa.Category]
+    chrom: pat.Series[str]
     chromStart: pat.Series[int]
     chromEnd: pat.Series[int]
     name: pat.Series[str] = pa.Field(nullable=True)
     score: pat.Series[float] = pa.Field(nullable=True)
-    strand: pat.Series[pa.Category] = pa.Field(isin=["+", "-", "."], nullable=True)
+    strand: pat.Series[str] = pa.Field(isin=["+", "-", "."], nullable=True)
     signalValue: pat.Series[float] = pa.Field(nullable=True)
     pValue: pat.Series[float] = pa.Field(nullable=True)
     qValue: pat.Series[float] = pa.Field(nullable=True)
@@ -257,12 +260,16 @@ class BroadPeakSchema(pa.DataFrameModel):
 
 
 def _read_broadpeak(broadpeak_path: PathType):
-    broadpeaks = pd.read_csv(
+    with open(broadpeak_path) as f:
+        skip_rows = 0
+        while f.readline().startswith(("track", "browser")):
+            skip_rows += 1
+    broadpeaks = pl.read_csv(
         broadpeak_path,
-        sep="\t",
-        header=None,
-        skiprows=lambda x: x in ["track", "browser"],
-        names=[
+        separator="\t",
+        has_header=False,
+        skip_rows=skip_rows,
+        new_columns=[
             "chrom",
             "chromStart",
             "chromEnd",
@@ -273,7 +280,7 @@ def _read_broadpeak(broadpeak_path: PathType):
             "pValue",
             "qValue",
         ],
-        dtype={"chrom": str, "name": str},
-    )
+        dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+    ).to_pandas()
     broadpeaks = BroadPeakSchema.to_schema()(broadpeaks)
     return broadpeaks
