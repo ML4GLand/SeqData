@@ -331,7 +331,7 @@ def merge_obs(
     on: Optional[str] = None,
     left_on: Optional[str] = None,
     right_on: Optional[str] = None,
-    how: Literal["inner", "left", "right", "outer", "cross"] = "inner",
+    how: Literal["inner", "left", "right", "outer", "exact"] = "inner",
 ):
     if on is None and (left_on is None or right_on is None):
         raise ValueError
@@ -344,10 +344,27 @@ def merge_obs(
     else:
         left_on = on
         right_on = on
-    sdata = sdata.set_coords(left_on).set_xindex(left_on)
+
+    if left_on not in sdata.data_vars:
+        sdata = sdata.assign({left_on: np.arange(sdata.dims[left_on])})
+    if left_on not in sdata.xindexes:
+        sdata = sdata.set_coords(left_on).set_xindex(left_on)
+
     if isinstance(obs, pd.DataFrame):
-        pass
-    raise NotImplementedError
+        if obs.index.name != right_on:
+            obs = obs.set_index(right_on)
+            obs.index.name = left_on
+        sdata = sdata.merge(obs, join=how)  # type: ignore
+    elif isinstance(obs, xr.Dataset):
+        if right_on not in obs.data_vars:
+            obs = obs.assign({right_on: np.arange(sdata.dims[right_on])})
+        if right_on not in obs.xindexes:
+            obs = (
+                obs.rename({right_on: left_on}).set_coords(left_on).set_xindex(left_on)
+            )
+        sdata = sdata.merge(obs, join=how)
+
+    return sdata
 
 
 def add_layers_from_files(

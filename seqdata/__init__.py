@@ -15,7 +15,13 @@ from ._io.read import (
 )
 from ._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
 from .torch import get_torch_dataloader
-from .xarray.seqdata import from_flat_files, from_region_files, open_zarr, to_zarr
+from .xarray.seqdata import (
+    from_flat_files,
+    from_region_files,
+    merge_obs,
+    open_zarr,
+    to_zarr,
+)
 
 __all__ = [
     "from_flat_files",
@@ -38,4 +44,5 @@ __all__ = [
     "Table",
     "add_bed_to_sdata",
     "mark_sequences_for_classification",
+    "merge_obs",
 ]
