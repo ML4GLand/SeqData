@@ -346,7 +346,7 @@ def merge_obs(
         right_on = on
 
     if left_on not in sdata.data_vars:
-        sdata = sdata.assign({left_on: np.arange(sdata.dims[left_on])})
+        sdata = sdata.assign({left_on: np.arange(sdata.sizes[left_on])})
     if left_on not in sdata.xindexes:
         sdata = sdata.set_coords(left_on).set_xindex(left_on)
 
@@ -357,7 +357,7 @@ def merge_obs(
         sdata = sdata.merge(obs, join=how)  # type: ignore
     elif isinstance(obs, xr.Dataset):
         if right_on not in obs.data_vars:
-            obs = obs.assign({right_on: np.arange(sdata.dims[right_on])})
+            obs = obs.assign({right_on: np.arange(sdata.sizes[right_on])})
         if right_on not in obs.xindexes:
             obs = (
                 obs.rename({right_on: left_on}).set_coords(left_on).set_xindex(left_on)
