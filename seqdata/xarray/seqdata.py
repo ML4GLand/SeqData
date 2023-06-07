@@ -22,11 +22,11 @@ import zarr
 from numcodecs import Blosc
 
 from seqdata._io.bed_ops import (
+    _bed_to_zarr,
     _expand_regions,
     _set_uniform_length_around_center,
     read_bedlike,
 )
-from seqdata._io.utils import _polars_df_to_xr_zarr
 from seqdata.types import FlatReader, PathType, RegionReader
 
 from .utils import _filter_by_exact_dims, _filter_layers, _filter_uns
@@ -252,7 +252,7 @@ def from_region_files(
                 )
             fixed_length += 2 * max_jitter
             _set_uniform_length_around_center(_bed, fixed_length)
-        _polars_df_to_xr_zarr(
+        _bed_to_zarr(
             pl.from_pandas(_bed),
             root,
             sequence_dim,
@@ -275,7 +275,7 @@ def from_region_files(
         bed_to_write = _bed.groupby("name").agg(
             pl.col(pl.Utf8).first(), pl.exclude(pl.Utf8)
         )
-        _polars_df_to_xr_zarr(
+        _bed_to_zarr(
             bed_to_write,
             root,
             sequence_dim,
@@ -283,6 +283,9 @@ def from_region_files(
             overwrite=overwrite,
         )
         _bed = _bed.to_pandas()
+
+    if "strand" not in _bed:
+        _bed["strand"] = "+"
 
     for reader in readers:
         reader._write(
@@ -357,6 +360,11 @@ def merge_obs(
         if obs.index.name != right_on:
             obs = obs.set_index(right_on)
             obs.index.name = left_on
+            obs = obs.to_xarray()
+            sdata_dim = sdata[left_on].dims[0]
+            obs_dim = obs[left_on].dims[0]
+            if sdata_dim != obs_dim:
+                obs[left_on].rename({obs_dim: sdata_dim})
         sdata = sdata.merge(obs, join=how)  # type: ignore
     elif isinstance(obs, xr.Dataset):
         if right_on not in obs.data_vars:
