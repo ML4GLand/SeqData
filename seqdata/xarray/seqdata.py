@@ -80,6 +80,7 @@ def open_zarr(
 def to_zarr(
     sdata: xr.Dataset,
     store: PathType,
+    load_first = False,
     chunk_store: Optional[Union[MutableMapping, PathType]] = None,
     mode: Optional[Literal["w", "w-", "a", "r+"]] = None,
     synchronizer: Optional[Any] = None,
@@ -93,26 +94,28 @@ def to_zarr(
     storage_options: Optional[Dict] = None,
     zarr_version: Optional[int] = None,
 ):
-    sdata.reset_encoding()
-
-    # rechunk non-uniform chunking
-    # Use chunk size that is:
-    # 1. most frequent
-    # 2. to break ties, largest
-    for arr in sdata.data_vars.values():
-        if arr.chunksizes is not None:
-            new_chunks = {}
-            chunk: Tuple[int, ...]
-            for dim, chunk in arr.chunksizes:
-                if len(chunk) > 1 and (
-                    (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
-                ):
-                    chunks, counts = np.unique(chunk, return_counts=True)
-                    chunk_size = chunks[counts == counts.max()].max()
-                    new_chunks[dim] = chunk_size
-                else:
-                    new_chunks[dim] = chunk
-            arr.chunk(new_chunks)
+    sdata = sdata.reset_encoding()
+    if load_first:
+        sdata.load()
+    else:
+        # rechunk non-uniform chunking
+        # Use chunk size that is:
+        # 1. most frequent
+        # 2. to break ties, largest
+        for arr in sdata.data_vars.values():
+            if arr.chunksizes is not None:
+                new_chunks = {}
+                chunk: Tuple[int, ...]
+                for dim, chunk in arr.chunksizes:
+                    if len(chunk) > 1 and (
+                        (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
+                    ):
+                        chunks, counts = np.unique(chunk, return_counts=True)
+                        chunk_size = chunks[counts == counts.max()].max()
+                        new_chunks[dim] = chunk_size
+                    else:
+                        new_chunks[dim] = chunk
+                arr.chunk(new_chunks)
 
     sdata.to_zarr(
         store=store,
