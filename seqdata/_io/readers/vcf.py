@@ -45,8 +45,8 @@ class VCF(RegionReader):
         name: str,
         vcf: PathType,
         fasta: PathType,
-        samples: List[str],
         batch_size: int,
+        samples: Optional[List[str]] = None,
         n_threads=1,
         samples_per_chunk=10,
         alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
@@ -56,7 +56,6 @@ class VCF(RegionReader):
         self.name = name
         self.vcf = Path(vcf)
         self.fasta = Path(fasta)
-        self.samples = samples
         self.batch_size = batch_size
         self.n_threads = n_threads
         self.samples_per_chunk = samples_per_chunk
@@ -73,7 +72,8 @@ class VCF(RegionReader):
 
         with pysam.FastaFile(str(fasta)) as f:
             fasta_contigs = set(f.references)
-        _vcf = cyvcf2.VCF(str(vcf))
+        _vcf = cyvcf2.VCF(str(vcf), samples=samples)
+        self.samples = _vcf.samples if samples is None else samples
         try:
             vcf_contigs = cast(Set[str], set(_vcf.seqlens))
         except AttributeError:
@@ -81,7 +81,7 @@ class VCF(RegionReader):
             vcf_contigs: Set[str] = set()
         _vcf.close()
 
-        self.contigs = natsorted(fasta_contigs | vcf_contigs)
+        self.contigs = cast(List[str], natsorted(fasta_contigs | vcf_contigs))
         if len(self.contigs) == 0:
             raise RuntimeError("FASTA has no contigs.")
         # * don't check for contigs exclusive to FASTA because VCF is not guaranteed to
