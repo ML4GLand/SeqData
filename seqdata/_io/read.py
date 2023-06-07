@@ -20,9 +20,12 @@ def read_table(
     batch_size: int,
     fixed_length: bool,
     overwrite=False,
+    **kwargs
 ) -> "xr.Dataset":
     sdata = from_flat_files(
-        Table(name=name, tables=tables, seq_col=seq_col, batch_size=batch_size),
+        Table(
+            name=name, tables=tables, seq_col=seq_col, batch_size=batch_size, **kwargs
+        ),
         path=out,
         fixed_length=fixed_length,
         overwrite=overwrite,

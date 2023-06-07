@@ -7,8 +7,10 @@ import pandera as pa
 import pandera.typing as pat
 import polars as pl
 import xarray as xr
+import zarr
 from pybedtools import BedTool
 
+from seqdata._io.utils import _polars_df_to_xr_zarr
 from seqdata.types import PathType
 
 
@@ -24,6 +26,11 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
 def _expand_regions(bed: pd.DataFrame, expansion_length: int):
     bed["chromStart"] = bed["chromStart"] - expansion_length
     bed["chromEnd"] = bed["chromEnd"] + expansion_length
+
+
+def _bed_to_zarr(bed: pl.DataFrame, root: zarr.Group, dim: str, **kwargs):
+    bed = bed.with_columns(pl.col(pl.Utf8).fill_null("."))
+    _polars_df_to_xr_zarr(bed, root, dim, **kwargs)
 
 
 def add_bed_to_sdata(
@@ -194,8 +201,6 @@ def _read_bed(bed_path: PathType):
         dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
     ).to_pandas()
-    if "strand" not in bed:
-        bed["strand"] = "+"
     bed = BEDSchema.to_schema()(bed)
     return bed
 
@@ -239,6 +244,7 @@ def _read_narrowpeak(narrowpeak_path: PathType) -> pd.DataFrame:
             "peak",
         ],
         dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+        null_values=".",
     ).to_pandas()
     narrowpeaks = NarrowPeakSchema.to_schema()(narrowpeaks)
     return narrowpeaks
@@ -281,6 +287,7 @@ def _read_broadpeak(broadpeak_path: PathType):
             "qValue",
         ],
         dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+        null_values=".",
     ).to_pandas()
     broadpeaks = BroadPeakSchema.to_schema()(broadpeaks)
     return broadpeaks

@@ -20,6 +20,7 @@ class Table(FlatReader):
         tables: Union[PathType, ListPathType],
         seq_col: str,
         batch_size: int,
+        **kwargs,
     ) -> None:
         self.name = name
         if not isinstance(tables, list):
@@ -27,6 +28,7 @@ class Table(FlatReader):
         self.tables = list(map(Path, tables))
         self.seq_col = seq_col
         self.batch_size = batch_size
+        self.kwargs = kwargs
 
     def _get_reader(self, table: Path):
         if ".csv" in table.suffixes:
@@ -35,7 +37,7 @@ class Table(FlatReader):
             sep = "\t"
         else:
             raise ValueError("Unknown file extension.")
-        return pd.read_csv(table, sep=sep, chunksize=self.batch_size)
+        return pd.read_csv(table, sep=sep, chunksize=self.batch_size, **self.kwargs)
 
     def _write_first_variable_length(
         self,

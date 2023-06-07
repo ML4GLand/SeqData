@@ -10,4 +10,4 @@
 1. Clone this repo
 2. Use the `environment.yml` file to install explicit dependencies
 3. Install [SeqPro](https://github.com/ML4GLand/SeqPro)
-4. Install PyTorch as an optional dependency -- enables use of `seqdata.get_torch_dataloader` to get DataLoaders from `xarray.Datasets` (i.e. SeqData objects).
+4. Install PyTorch (2.0 or higher) as an optional dependency -- enables use of `seqdata.get_torch_dataloader` to get DataLoaders from `xarray.Datasets` (i.e. SeqData objects).

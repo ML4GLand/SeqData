@@ -14,9 +14,10 @@ dependencies:
   - pandas
   - pandera
   - polars
+  - pybedtools
   - pybigwig
   - pysam
   - tqdm
   - typing-extensions
-  - xarray
+  - xarray>=2023.4.0
   - zarr
