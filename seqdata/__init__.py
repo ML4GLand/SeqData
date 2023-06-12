@@ -1,10 +1,6 @@
 """Annotated sequence data"""
 
-from ._io.bed_ops import (
-    add_bed_to_sdata,
-    mark_sequences_for_classification,
-    read_bedlike,
-)
+from ._io.bed_ops import add_bed_to_sdata, label_overlapping_regions, read_bedlike
 from ._io.read import (
     read_bam,
     read_bigwig,
@@ -43,6 +39,6 @@ __all__ = [
     "GenomeFASTA",
     "Table",
     "add_bed_to_sdata",
-    "mark_sequences_for_classification",
+    "label_overlapping_regions",
     "merge_obs",
 ]

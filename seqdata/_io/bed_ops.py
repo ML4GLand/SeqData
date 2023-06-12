@@ -46,43 +46,58 @@ def add_bed_to_sdata(
     return sdata.merge(bed.to_xarray())
 
 
-def mark_sequences_for_classification(
+def label_overlapping_regions(
     sdata: xr.Dataset,
-    targets: Union[pd.DataFrame, List[str]],
+    targets: Union[PathType, pd.DataFrame, List[str]],
     mode: Literal["binary", "multitask"],
     label_dim: Optional[str] = None,
+    fraction_overlap: Optional[float] = None,
 ) -> xr.DataArray:
-    """Mark sequences for binary or multitask classification based on whether they
-    intersect with another set of regions.
+    """Label regions for binary or multitask classification based on whether they
+    overlap with another set of regions.
 
     Parameters
     ----------
     sdata : xr.Dataset
-    targets : Union[pd.DataFrame, List[str]]
-        Either a DataFrame with at least columns ['chrom', 'chromStart', 'chromEnd',
-        'name'], or a list of variable names in `sdata` to use that correspond to the
-        ['chrom', 'chromStart', 'chromEnd', 'name'] columns, in that order. This is
-        useful if, for example, another set of regions is already in the `sdata` object
-        under a different set of column names.
+    targets : Union[str, Path, pd.DataFrame, List[str]]
+        Either a DataFrame (or path to one) with (for binary classification) at least
+        columns ['chrom', 'chromStart', 'chromEnd'], or a list of variable names in
+        `sdata` to use that correspond to the ['chrom', 'chromStart', 'chromEnd']
+        columns, in that order. This is useful if, for example, another set of regions
+        is already in the `sdata` object under a different set of column names. For
+        multitask classification, the 'name' column is also required (i.e. binary
+        requires BED3 format, multitask requires BED4).
     mode : Literal["binary", "multitask"]
         Whether to mark regions for binary (intersects with any of the target regions)
         or multitask classification (which target region does it intersect with?).
     label_dim : str, optional
         Name of the label dimension. Only needed for multitask classification.
+    fraction_overlap: float, optional
+        Fraction of the length that must be overlapping to be considered an
+        overlap. This is the "reciprocal minimal overlap fraction" as described in the
+        [bedtools documentation](https://bedtools.readthedocs.io/en/latest/content/tools/intersect.html#r-and-f-requiring-reciprocal-minimal-overlap-fraction).
     """
     bed1 = BedTool.from_dataframe(
         sdata[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
     )
 
-    if isinstance(targets, pd.DataFrame):
+    if isinstance(targets, (str, Path)):
+        bed2 = BedTool(targets)
+    elif isinstance(targets, pd.DataFrame):
         bed2 = BedTool.from_dataframe(targets)
     elif isinstance(targets, list):
         bed2 = BedTool.from_dataframe(sdata[targets].to_dataframe())
 
+    if fraction_overlap is not None and (fraction_overlap < 0 or fraction_overlap > 1):
+        raise ValueError("Fraction overlap must be between 0 and 1 (inclusive).")
+
     if mode == "binary":
         if label_dim is not None:
             warnings.warn("Ignoring `label_dim` for binary classification.")
-        res = bed1.intersect(bed2, c=True)  # type: ignore
+        if fraction_overlap is None:
+            res = bed1.intersect(bed2, c=True)  # type: ignore
+        else:
+            res = bed1.intersect(bed2, c=True, f=fraction_overlap, r=True)  # type: ignore
         with open(res.fn) as f:
             n_cols = len(f.readline().split("\t"))
         labels = (
@@ -103,7 +118,10 @@ def mark_sequences_for_classification(
                 """Need a name for the label dimension when generating labels for 
                 multitask classification."""
             )
-        res = bed1.intersect(bed2, loj=True)  # type: ignore
+        if fraction_overlap is None:
+            res = bed1.intersect(bed2, loj=True)  # type: ignore
+        else:
+            res = bed1.intersect(bed2, loj=True, f=fraction_overlap, r=True)  # type: ignore
         labels = (
             pl.read_csv(
                 res.fn,

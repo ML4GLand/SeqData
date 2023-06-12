@@ -163,6 +163,11 @@ def get_torch_dataloader(
     if not TORCH_AVAILABLE:
         raise ImportError("Install PyTorch to get a DataLoader from SeqData.")
 
+    if isinstance(sample_dims, str):
+        sample_dims = [sample_dims]
+    if isinstance(variables, str):
+        variables = [variables]
+
     variables_not_in_ds = set(variables) - set(sdata.data_vars.keys())
     if variables_not_in_ds:
         raise ValueError(
@@ -187,11 +192,6 @@ def get_torch_dataloader(
             f"""Got transforms for variables that are not in the SeqData: 
             {transform_vars_not_in_ds}"""
         )
-
-    if isinstance(sample_dims, str):
-        sample_dims = [sample_dims]
-    if isinstance(variables, str):
-        variables = [variables]
 
     dim_sizes = [sdata.dims[d] for d in sample_dims]
     dataset = _cartesian_product([np.arange(d) for d in dim_sizes])
