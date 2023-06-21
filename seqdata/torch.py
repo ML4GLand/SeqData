@@ -9,21 +9,16 @@ from typing import (
     Sequence,
     Tuple,
     Union,
+    cast,
     overload,
 )
 
-import dask
+import dask.config
 import numpy as np
+import torch
 import xarray as xr
 from numpy.typing import NDArray
-
-try:
-    import torch
-    from torch.utils.data import DataLoader, Sampler
-
-    TORCH_AVAILABLE = True
-except ImportError:
-    TORCH_AVAILABLE = False
+from torch.utils.data import DataLoader, Sampler
 
 
 def _cartesian_product(arrays: Sequence[NDArray]) -> NDArray:
@@ -184,8 +179,6 @@ def get_torch_dataloader(
     -------
     DataLoader that returns dictionaries or tuples of tensors.
     """
-    if not TORCH_AVAILABLE:
-        raise ImportError("Install PyTorch to get a DataLoader from SeqData.")
 
     if isinstance(sample_dims, str):
         sample_dims = [sample_dims]
@@ -208,7 +201,7 @@ def get_torch_dataloader(
     vars_with_transforms = set()
     for k in _transforms:
         if isinstance(k, tuple):
-            vars_with_transforms.update(*k)
+            vars_with_transforms.update(k)
         else:
             vars_with_transforms.add(k)
     transform_vars_not_in_vars = vars_with_transforms - set(variables)
@@ -228,7 +221,7 @@ def get_torch_dataloader(
     if isinstance(dtypes, torch.dtype):
         dtypes = {k: dtypes for k in variables}
     dim_sizes = [sdata.dims[d] for d in sample_dims]
-    dataset = _cartesian_product([np.arange(d) for d in dim_sizes])
+    dataset = _cartesian_product([np.arange(d, dtype="uintp") for d in dim_sizes])
 
     def collate_fn(indices: List[NDArray]):
         idx = np.vstack(indices)
@@ -243,21 +236,24 @@ def get_torch_dataloader(
         }
 
         # select data and convert to numpy
-        with dask.config.set(**{"array.slicing.split_large_chunks": False}):
-            out: Dict[str, NDArray] = {
+        out: Union[Tuple[torch.Tensor], Dict[str, NDArray], Dict[str, torch.Tensor]]
+        with dask.config.set({"array.slicing.split_large_chunks": False}):
+            out = {
                 k: arr.isel(selector, missing_dims="ignore").to_numpy()
                 for k, arr in sdata[variables].data_vars.items()
             }
+            out = cast(Dict[str, NDArray], out)
 
         # apply transforms
         for k, fn in _transforms.items():
             if isinstance(k, tuple):
                 _arrs = tuple(out[var] for var in k)
-                out.update(dict(zip(k, fn(*_arrs))))
+                out.update(dict(zip(k, fn(_arrs))))
             else:
                 out[k] = fn(out[k])
 
         # convert to torch
+        out = cast(Dict[str, torch.Tensor], out)
         for k in out:
             out[k] = torch.as_tensor(out[k], dtype=dtypes[k])
 
