@@ -12,6 +12,7 @@ from typing import (
     overload,
 )
 
+import dask
 import numpy as np
 import xarray as xr
 from numpy.typing import NDArray
@@ -48,7 +49,12 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    transforms: Optional[
+        Dict[
+            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+        ]
+    ] = None,
+    dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples: Literal[False],
     batch_size: Optional[int] = 1,
@@ -73,7 +79,12 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    transforms: Optional[
+        Dict[
+            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+        ]
+    ] = None,
+    dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples: Literal[True],
     batch_size: Optional[int] = 1,
@@ -98,7 +109,12 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    transforms: Optional[
+        Dict[
+            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+        ]
+    ] = None,
+    dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples=False,
     batch_size: Optional[int] = 1,
@@ -122,7 +138,12 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[Dict[str, Callable[[NDArray], "torch.Tensor"]]] = None,
+    transforms: Optional[
+        Dict[
+            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+        ]
+    ] = None,
+    dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples=False,
     batch_size: Optional[int] = 1,
@@ -150,9 +171,12 @@ def get_torch_dataloader(
         have dimensions `['batch', 'length']`.
     variables : list[str]
         Which variables to sample from.
-    transforms : Dict[str, (ndarray) -> Tensor], optional
-        Transforms to apply to each variable. Defaults to simply transforming arrays
-        to Tensor.
+    transforms : Dict[str | tuple[str], (ndarray | tuple[ndarray]) -> ndarray], optional
+        Transforms to apply to each variable. Will be applied in order and keys that are
+        tuples of strings will pass the corresponding variables to the transform in the
+        order that the variable names appear. See examples for details.
+    dtypes : torch.dtype, Dict[str, torch.dtype]
+        Data type to convert each variable to after applying all transforms.
 
     For other parameters, see documentation for [DataLoader](https://pytorch.org/docs/stable/data.html#torch.utils.data.DataLoader)
 
@@ -163,6 +187,11 @@ def get_torch_dataloader(
     if not TORCH_AVAILABLE:
         raise ImportError("Install PyTorch to get a DataLoader from SeqData.")
 
+    if isinstance(sample_dims, str):
+        sample_dims = [sample_dims]
+    if isinstance(variables, str):
+        variables = [variables]
+
     variables_not_in_ds = set(variables) - set(sdata.data_vars.keys())
     if variables_not_in_ds:
         raise ValueError(
@@ -170,51 +199,73 @@ def get_torch_dataloader(
         )
 
     if transforms is None:
-        _transforms: Dict[str, Callable[[NDArray], "torch.Tensor"]] = {}
+        _transforms: Dict[
+            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+        ] = {}
     else:
         _transforms = transforms
 
-    transform_vars_not_in_vars = set(_transforms.keys()) - set(variables)
+    vars_with_transforms = set()
+    for k in _transforms:
+        if isinstance(k, tuple):
+            vars_with_transforms.update(*k)
+        else:
+            vars_with_transforms.add(k)
+    transform_vars_not_in_vars = vars_with_transforms - set(variables)
     if transform_vars_not_in_vars:
         raise ValueError(
             f"""Got transforms for variables that are not requested: 
             {transform_vars_not_in_vars}"""
         )
 
-    transform_vars_not_in_ds = set(_transforms.keys()) - set(sdata.data_vars.keys())
+    transform_vars_not_in_ds = vars_with_transforms - set(sdata.data_vars.keys())
     if transform_vars_not_in_ds:
         raise ValueError(
-            f"""Got transforms for variables that are not in the SeqData: 
+            f"""Got transforms for variables that are not in the dataset: 
             {transform_vars_not_in_ds}"""
         )
 
-    if isinstance(sample_dims, str):
-        sample_dims = [sample_dims]
-    if isinstance(variables, str):
-        variables = [variables]
-
+    if isinstance(dtypes, torch.dtype):
+        dtypes = {k: dtypes for k in variables}
     dim_sizes = [sdata.dims[d] for d in sample_dims]
     dataset = _cartesian_product([np.arange(d) for d in dim_sizes])
 
     def collate_fn(indices: List[NDArray]):
         idx = np.vstack(indices)
-        # avoid Dask PerformanceWarning using an unsorted 1-d indexer
+
+        # avoid Dask PerformanceWarning caused by using an unsorted 1-d indexer
         if idx.shape[-1] == 1:
             idx = np.sort(idx, axis=None).reshape(-1, 1)
+
+        # make a selector to grab the batch
         selector = {
             d: xr.DataArray(idx[:, i], dims="batch") for i, d in enumerate(sample_dims)
         }
-        out = {
-            k: arr.isel(selector, missing_dims="ignore").to_numpy()
-            for k, arr in sdata[variables].data_vars.items()
-        }
-        out_tensors = {
-            k: _transforms.get(k, lambda x: torch.as_tensor(x))(arr)
-            for k, arr in out.items()
-        }
+
+        # select data and convert to numpy
+        with dask.config.set(**{"array.slicing.split_large_chunks": False}):
+            out: Dict[str, NDArray] = {
+                k: arr.isel(selector, missing_dims="ignore").to_numpy()
+                for k, arr in sdata[variables].data_vars.items()
+            }
+
+        # apply transforms
+        for k, fn in _transforms.items():
+            if isinstance(k, tuple):
+                _arrs = tuple(out[var] for var in k)
+                out.update(dict(zip(k, fn(*_arrs))))
+            else:
+                out[k] = fn(out[k])
+
+        # convert to torch
+        for k in out:
+            out[k] = torch.as_tensor(out[k], dtype=dtypes[k])
+
+        # convert to a tuple if desired
         if return_tuples:
-            out_tensors = tuple(out_tensors.values())
-        return out_tensors
+            out = tuple(out.values())
+
+        return out
 
     return DataLoader(
         dataset,  # type: ignore

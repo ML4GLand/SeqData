@@ -1,5 +1,4 @@
 """Annotated sequence data"""
-
 try:
     import importlib.metadata as importlib_metadata
 except ModuleNotFoundError:
@@ -8,11 +7,8 @@ except ModuleNotFoundError:
 package_name = "seqdata"
 __version__ = importlib_metadata.version(package_name)
 
-from ._io.bed_ops import (
-    add_bed_to_sdata,
-    mark_sequences_for_classification,
-    read_bedlike,
-)
+from ._io.bed_ops import add_bed_to_sdata, label_overlapping_regions, read_bedlike
+
 from ._io.read import (
     read_bam,
     read_bigwig,
@@ -51,6 +47,6 @@ __all__ = [
     "GenomeFASTA",
     "Table",
     "add_bed_to_sdata",
-    "mark_sequences_for_classification",
+    "label_overlapping_regions",
     "merge_obs",
 ]

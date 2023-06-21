@@ -48,7 +48,7 @@ class Table(FlatReader):
         root: zarr.Group,
         compressor,
         sequence_dim: str,
-        overwrite,
+        overwrite: bool,
     ):
         seqs = batch[self.seq_col].str.encode("ascii").to_numpy()
         obs = batch.drop(columns=self.seq_col)

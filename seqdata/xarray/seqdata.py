@@ -95,27 +95,27 @@ def to_zarr(
     zarr_version: Optional[int] = None,
 ):
     sdata = sdata.reset_encoding()
-    if load_first:
-        sdata.load()
-    else:
+
+    for arr in sdata.data_vars.values():
+        if "_FillValue" in arr.attrs:
+            del arr.attrs["_FillValue"]
+
         # rechunk non-uniform chunking
         # Use chunk size that is:
         # 1. most frequent
         # 2. to break ties, largest
-        for arr in sdata.data_vars.values():
-            if arr.chunksizes is not None:
-                new_chunks = {}
-                chunk: Tuple[int, ...]
-                for dim, chunk in arr.chunksizes.items():
-                    if len(chunk) > 1 and (
-                        (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
-                    ):
-                        chunks, counts = np.unique(chunk, return_counts=True)
-                        chunk_size = chunks[counts == counts.max()].max()
-                        new_chunks[dim] = chunk_size
-                    else:
-                        new_chunks[dim] = chunk
-                arr.chunk(new_chunks)
+        if arr.chunksizes is not None:
+            new_chunks = {}
+            for dim, chunk in arr.chunksizes.items():
+                if len(chunk) > 1 and (
+                    (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
+                ):
+                    chunks, counts = np.unique(chunk, return_counts=True)
+                    chunk_size = chunks[counts == counts.max()].max()
+                    new_chunks[dim] = chunk_size
+                else:
+                    new_chunks[dim] = chunk
+            arr.chunk(new_chunks)
 
     sdata.to_zarr(
         store=store,
@@ -241,6 +241,9 @@ def from_region_files(
     else:
         _bed = bed
 
+    if "strand" not in _bed:
+        _bed["strand"] = "+"
+
     if not splice:
         if fixed_length is False:
             _expand_regions(_bed, max_jitter)
@@ -283,9 +286,6 @@ def from_region_files(
             overwrite=overwrite,
         )
         _bed = _bed.to_pandas()
-
-    if "strand" not in _bed:
-        _bed["strand"] = "+"
 
     for reader in readers:
         reader._write(
