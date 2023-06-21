@@ -106,7 +106,7 @@ def to_zarr(
             if arr.chunksizes is not None:
                 new_chunks = {}
                 chunk: Tuple[int, ...]
-                for dim, chunk in arr.chunksizes:
+                for dim, chunk in arr.chunksizes.items():
                     if len(chunk) > 1 and (
                         (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
                     ):
