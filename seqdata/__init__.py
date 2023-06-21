@@ -10,7 +10,6 @@ from ._io.read import (
     read_vcf,
 )
 from ._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
-from .torch import get_torch_dataloader
 from .xarray.seqdata import (
     from_flat_files,
     from_region_files,
@@ -18,6 +17,20 @@ from .xarray.seqdata import (
     open_zarr,
     to_zarr,
 )
+
+try:
+    from .torch import get_torch_dataloader
+
+    TORCH_AVAILABLE = True
+except ImportError:
+    TORCH_AVAILABLE = False
+
+    def no_torch():
+        raise ImportError(
+            "Install PyTorch to use functionality from SeqData's torch submodule."
+        )
+
+    get_torch_dataloader = no_torch()
 
 __all__ = [
     "from_flat_files",
