@@ -32,13 +32,11 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
-
     def no_torch():
         raise ImportError(
             "Install PyTorch to use functionality from SeqData's torch submodule."
         )
-
-    get_torch_dataloader = no_torch()
+    get_torch_dataloader = no_torch
 
 __all__ = [
     "from_flat_files",

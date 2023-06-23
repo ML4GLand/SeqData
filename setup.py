@@ -9,9 +9,9 @@ requirements = []
 
 setup(
     name="seqdata",
-    version="0.0.1",
+    version="0.1.1",
     author="Adam Klie",
-    author_email="aklie@eng.ucsd.edu",
+    author_email="aklie@ucsd.edu",
     description="Annotated sequence data",
     long_description=readme,
     long_description_content_type="text/markdown",
