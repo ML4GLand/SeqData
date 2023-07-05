@@ -163,6 +163,13 @@ class VCF(RegionReader):
                 tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
 
                 region = f"{contig}:{max(start, 0)+1}-{end}"
+                positions_alleles = [
+                    self._get_pos_alleles(v) for v in vcf(region) if v.is_snp
+                ]
+                # no variants in region
+                if len(positions_alleles) == 0:
+                    continue
+
                 positions_ls, alleles_ls = zip(
                     *[self._get_pos_alleles(v) for v in vcf(region) if v.is_snp]
                 )
