@@ -170,9 +170,7 @@ class VCF(RegionReader):
                 if len(positions_alleles) == 0:
                     continue
 
-                positions_ls, alleles_ls = zip(
-                    *[self._get_pos_alleles(v) for v in vcf(region) if v.is_snp]
-                )
+                positions_ls, alleles_ls = zip(*positions_alleles)
                 # (variants)
                 relative_positions = (
                     cast(NDArray[np.int64], np.array(positions_ls)) - start
