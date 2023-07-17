@@ -6,12 +6,18 @@ channels:
 dependencies:
   - cyvcf2
   - dask
+  - joblib
+  - more-itertools
   - natsort
+  - numcodecs
+  - numpy
   - pandas
   - pandera
+  - polars
+  - pybedtools
   - pybigwig
   - pysam
   - tqdm
-  - typing_extensions
-  - xarray
+  - typing-extensions
+  - xarray>=2023.4.0
   - zarr

@@ -1,23 +1,34 @@
-from typing import List, Optional, Type, Union
+from typing import TYPE_CHECKING, List, Optional, Type, Union
 
 import numpy as np
+import seqpro as sp
 
-from seqdata._core.seqdata import SeqData
 from seqdata._io.readers import BAM, VCF, BigWig, FlatFASTA, GenomeFASTA, Table
-from seqdata.alphabets import SequenceAlphabet
-from seqdata.types import PathType
+from seqdata.types import ListPathType, PathType
+from seqdata.xarray.seqdata import from_flat_files, from_region_files
+
+if TYPE_CHECKING:
+    import pandas as pd
+    import xarray as xr
 
 
 def read_table(
     name: str,
     out: PathType,
-    tables: Union[PathType, List[PathType]],
+    tables: Union[PathType, ListPathType],
     seq_col: str,
     batch_size: int,
+    fixed_length: bool,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
-        Table(name, tables, seq_col, batch_size), path=out, overwrite=overwrite
+    **kwargs
+) -> "xr.Dataset":
+    sdata = from_flat_files(
+        Table(
+            name=name, tables=tables, seq_col=seq_col, batch_size=batch_size, **kwargs
+        ),
+        path=out,
+        fixed_length=fixed_length,
+        overwrite=overwrite,
     )
     return sdata
 
@@ -27,11 +38,15 @@ def read_flat_fasta(
     out: PathType,
     fasta: PathType,
     batch_size: int,
+    fixed_length: bool,
     n_threads=1,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
-        FlatFASTA(name, fasta, batch_size, n_threads), path=out, overwrite=overwrite
+) -> "xr.Dataset":
+    sdata = from_flat_files(
+        FlatFASTA(name=name, fasta=fasta, batch_size=batch_size, n_threads=n_threads),
+        path=out,
+        fixed_length=fixed_length,
+        overwrite=overwrite,
     )
     return sdata
 
@@ -40,18 +55,24 @@ def read_genome_fasta(
     name: str,
     out: PathType,
     fasta: PathType,
-    length: int,
-    bed: PathType,
+    bed: Union[PathType, "pd.DataFrame"],
     batch_size: int,
+    fixed_length: Union[int, bool],
     n_threads=1,
-    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
-        GenomeFASTA(name, fasta, batch_size, n_threads, alphabet),
+) -> "xr.Dataset":
+    sdata = from_region_files(
+        GenomeFASTA(
+            name=name,
+            fasta=fasta,
+            batch_size=batch_size,
+            n_threads=n_threads,
+            alphabet=alphabet,
+        ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
@@ -60,33 +81,41 @@ def read_genome_fasta(
 
 
 def read_bam(
-    name: str,
+    seq_name: str,
+    cov_name: str,
     out: PathType,
-    bams: List[PathType],
+    fasta: PathType,
+    bams: ListPathType,
     samples: List[str],
-    length: int,
-    bed: PathType,
+    bed: Union[PathType, "pd.DataFrame"],
     batch_size: int,
+    fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
-    samples_per_chunk=10,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_region_files(
+        GenomeFASTA(
+            name=seq_name,
+            fasta=fasta,
+            batch_size=batch_size,
+            n_threads=n_jobs * threads_per_job,
+            alphabet=alphabet,
+        ),
         BAM(
-            name,
-            bams,
-            samples,
-            batch_size,
-            n_jobs,
-            threads_per_job,
-            samples_per_chunk,
-            dtype,
+            name=cov_name,
+            bams=bams,
+            samples=samples,
+            batch_size=batch_size,
+            n_jobs=n_jobs,
+            threads_per_job=threads_per_job,
+            dtype=dtype,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
@@ -95,33 +124,41 @@ def read_bam(
 
 
 def read_bigwig(
-    name: str,
+    seq_name: str,
+    cov_name: str,
     out: PathType,
-    bams: List[PathType],
+    fasta: PathType,
+    bigwigs: ListPathType,
     samples: List[str],
-    length: int,
-    bed: PathType,
+    bed: Union[PathType, "pd.DataFrame"],
     batch_size: int,
+    fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
-    samples_per_chunk=10,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+) -> "xr.Dataset":
+    sdata = from_region_files(
+        GenomeFASTA(
+            name=seq_name,
+            fasta=fasta,
+            batch_size=batch_size,
+            n_threads=n_jobs * threads_per_job,
+            alphabet=alphabet,
+        ),
         BigWig(
-            name,
-            bams,
-            samples,
-            batch_size,
-            n_jobs,
-            threads_per_job,
-            samples_per_chunk,
-            dtype,
+            name=cov_name,
+            bigwigs=bigwigs,
+            samples=samples,
+            batch_size=batch_size,
+            n_jobs=n_jobs,
+            threads_per_job=threads_per_job,
+            dtype=dtype,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
@@ -135,30 +172,32 @@ def read_vcf(
     vcf: PathType,
     fasta: PathType,
     samples: List[str],
-    length: int,
-    bed: PathType,
+    bed: Union[PathType, "pd.DataFrame"],
     batch_size: int,
+    fixed_length: Union[int, bool],
     n_threads=1,
     samples_per_chunk=10,
-    alphabet: Optional[Union[str, SequenceAlphabet]] = None,
+    alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
     max_jitter=0,
     overwrite=False,
-) -> SeqData:
-    sdata = SeqData.from_files(
+    splice=False,
+) -> "xr.Dataset":
+    sdata = from_region_files(
         VCF(
-            name,
-            vcf,
-            fasta,
-            samples,
-            batch_size,
-            n_threads,
-            samples_per_chunk,
-            alphabet,
+            name=name,
+            vcf=vcf,
+            fasta=fasta,
+            samples=samples,
+            batch_size=batch_size,
+            n_threads=n_threads,
+            samples_per_chunk=samples_per_chunk,
+            alphabet=alphabet,
         ),
         path=out,
-        length=length,
+        fixed_length=fixed_length,
         bed=bed,
         max_jitter=max_jitter,
         overwrite=overwrite,
+        splice=splice,
     )
     return sdata
