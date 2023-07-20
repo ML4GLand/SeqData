@@ -2073,13 +2073,13 @@ files = [
 
 [[package]]
 name = "seqpro"
-version = "0.1.1"
+version = "0.1.3"
 description = "Sequence processing toolkit"
 optional = false
 python-versions = ">=3.8,<4.0"
 files = [
-    {file = "seqpro-0.1.1-py3-none-any.whl", hash = "sha256:b53990e473ead44f0fa1cdeb7053d9089d99380f8614697cfef27031571e74ad"},
-    {file = "seqpro-0.1.1.tar.gz", hash = "sha256:ac934203e6f5be4ca0794e1d9a22b5cf479d858fc4b00c39ac0433cf6c31590a"},
+    {file = "seqpro-0.1.3-py3-none-any.whl", hash = "sha256:38340901026065d8010a6e556e07f9a91675595dc4b7d1f91771c1665a7f2b4d"},
+    {file = "seqpro-0.1.3.tar.gz", hash = "sha256:b7c7a3706db0fa119877c6b07e462c06b7be668d102d335ab1beb5c27949272f"},
 ]
 
 [package.dependencies]
@@ -2831,4 +2831,4 @@ torch = ["torch"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.9"
-content-hash = "7985b80b0caf0fe6254fbdee880b5184c454d63200b6c17682fa91a410ea3995"
+content-hash = "1dce87ac0bf5de31c39d76f998ef2b7bb39b9c0ecf13e04692330e296ad6ecd9"

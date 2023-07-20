@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "seqdata"
-version = "0.1.1"
+version = "0.1.2"
 description = "Annotated sequence data"
 authors = ["adamklie <aklie@ucsd.edu>"]
 
@@ -24,8 +24,8 @@ pandas = "^1.5.2"
 numcodecs = "^0.11.0"
 typing-extensions = "^4.5.0"
 tqdm = "^4.65.0"
-seqpro = "0.1.1"
-torch = {version = "^1.12.0", extras = ["torch"]}
+seqpro = "^0.1.1"
+torch = {version = ">=1.12.0", extras = ["torch"]}
 Sphinx = {version = "^6.2.1", extras = ["docs"]}
 sphinx-autobuild = {version = "2021.3.14", extras = ["docs"]}
 sphinx-autodoc-typehints = {version = "^1.21.1", extras = ["docs"]}
