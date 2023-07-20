@@ -39,6 +39,7 @@ def add_bed_to_sdata(
     col_prefix: Optional[str] = None,
     sequence_dim: Optional[str] = None,
 ):
+    """Add a BED-like DataFrame to a Dataset."""
     if col_prefix is not None:
         bed.columns = [col_prefix + c for c in bed.columns]
     if sequence_dim is not None:

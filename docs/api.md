@@ -51,13 +51,14 @@ These functions are special cases of the composable readers that are designed to
    read_bedlike
 ```
 
-## Writing
-SeqData writes all datasets to disk as Zarr stores using the following functions
+## Zarr
+SeqData reads and writes all datasets to disk as Zarr stores using the following functions
 
 ```{eval-rst}
 .. autosummary::
    :toctree: api/
 
+   to_zarr
    open_zarr
 ``` 
 

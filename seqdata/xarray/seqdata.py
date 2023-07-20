@@ -54,6 +54,50 @@ def open_zarr(
     zarr_version: Optional[int] = None,
     **kwargs,
 ):
+    """Open a SeqData object from disk.
+
+    Parameters
+    ----------
+    store : str, Path
+        Path to the SeqData object.
+    group : str, optional
+        Name of the group to open, by default None
+    synchronizer : None, optional
+        Synchronizer to use, by default None
+    chunks : {None, True, False, int, dict, tuple}, optional
+        Chunking scheme to use, by default "auto"
+    decode_cf : bool, optional
+        Whether to decode CF conventions, by default True
+    mask_and_scale : bool, optional
+        Whether to mask and scale data, by default False
+    decode_times : bool, optional
+        Whether to decode times, by default True
+    concat_characters : bool, optional
+        Whether to concatenate characters, by default False
+    decode_coords : bool, optional
+        Whether to decode coordinates, by default True
+    drop_variables : {None, str, iterable}, optional
+        Variables to drop, by default None
+    consolidated : bool, optional
+        Whether to consolidate metadata, by default None
+    overwrite_encoded_chunks : bool, optional
+        Whether to overwrite encoded chunks, by default False
+    chunk_store : {None, MutableMapping, str, Path}, optional
+        Chunk store to use, by default None
+    storage_options : dict, optional
+        Storage options to use, by default None
+    decode_timedelta : bool, optional
+        Whether to decode timedeltas, by default None
+    use_cftime : bool, optional
+        Whether to use cftime, by default None
+    zarr_version : int, optional
+        Zarr version to use, by default None
+    
+    Returns
+    -------
+    xr.Dataset
+        SeqData object
+    """
     ds = xr.open_zarr(
         store=store,
         group=group,
@@ -80,7 +124,6 @@ def open_zarr(
 def to_zarr(
     sdata: xr.Dataset,
     store: PathType,
-    load_first = False,
     chunk_store: Optional[Union[MutableMapping, PathType]] = None,
     mode: Optional[Literal["w", "w-", "a", "r+"]] = None,
     synchronizer: Optional[Any] = None,
@@ -94,6 +137,46 @@ def to_zarr(
     storage_options: Optional[Dict] = None,
     zarr_version: Optional[int] = None,
 ):
+    """Write a xarray object to disk as a Zarr store.
+
+    Makes use of the `to_zarr` method of xarray objects, but modifies 
+    the encoding for cases where the chunking is not uniform.
+
+    Parameters
+    ----------
+    sdata : xr.Dataset
+        SeqData object to write to disk.
+    store : str, Path
+        Path to the SeqData object.
+    chunk_store : {None, MutableMapping, str, Path}, optional
+        Chunk store to use, by default None
+    mode : {None, "w", "w-", "a", "r+"}, optional
+        Mode to use, by default None
+    synchronizer : None, optional
+        Synchronizer to use, by default None
+    group : str, optional
+        Name of the group to open, by default None
+    encoding : dict, optional
+        Encoding to use, by default None
+    compute : bool, optional
+        Whether to compute, by default True
+    consolidated : bool, optional
+        Whether to consolidate metadata, by default None
+    append_dim : {None, str}, optional
+        Name of the append dimension, by default None
+    region : dict, optional
+        Region to use, by default None
+    safe_chunks : bool, optional
+        Whether to use safe chunks, by default True
+    storage_options : dict, optional
+        Storage options to use, by default None
+    zarr_version : int, optional
+        Zarr version to use, by default None
+
+    Returns
+    -------
+    None
+    """
     sdata = sdata.reset_encoding()
 
     for arr in sdata.data_vars.values():
@@ -142,7 +225,10 @@ def from_flat_files(
     length_dim: Optional[str] = None,
     overwrite=False,
 ) -> xr.Dataset:
-    """Save a SeqData to disk and open it (without loading it into memory).
+    """Composable function to create a SeqData object from flat files.
+    
+    Saves a SeqData to disk and open it (without loading it into memory).
+    TODO: Tutorials coming soon.
 
     Parameters
     ----------
@@ -192,7 +278,10 @@ def from_region_files(
     splice=False,
     overwrite=False,
 ) -> xr.Dataset:
-    """Save a SeqData to disk and open it (without loading it into memory).
+    """Composable function to create a SeqData object from region based files.
+    
+    Saves a SeqData to disk and open it (without loading it into memory).
+    TODO: Tutorials coming soon.
 
     Parameters
     ----------
@@ -339,6 +428,7 @@ def merge_obs(
     right_on: Optional[str] = None,
     how: Literal["inner", "left", "right", "outer", "exact"] = "inner",
 ):
+    """Merge observations into a SeqData object along sequence axis."""
     if on is None and (left_on is None or right_on is None):
         raise ValueError
     if on is not None and (left_on is not None or right_on is not None):
