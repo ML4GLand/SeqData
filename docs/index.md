@@ -3,7 +3,7 @@
 # SeqData -- Annotated biological sequence data
 <img src="_static/seqdata_xr.png" alt="seqdata xr" width=600>
 
-SeqData is a Python package for loading genomics sequenced-based data from a variety of file formats into [xarray](https://xarray.pydata.org/en/stable/) objects. SeqData provides a unified interface for loading data from a variety of file formats, including:
+SeqData is a Python package for loading genomics sequenced-based data from a variety of file formats into [xarray](https://xarray.pydata.org/en/stable/) objects. SeqData provides a unified interface for loading data from:
 
 * **TSV** -- tabular data
 * **FASTA** -- sequence data
