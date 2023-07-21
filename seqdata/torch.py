@@ -8,6 +8,7 @@ from typing import (
     Literal,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
     cast,
@@ -283,9 +284,7 @@ def get_torch_dataloader(
     )
 
 
-# TODO: async dataloading. See dask asynchronous operation (https://distributed.dask.org/en/stable/asynchronous.html).
-# ! TODO: fix issue when variables only have a subset of sample_dims
-# ! TODO: allow in-memory sdata
+# TODO: allow in-memory sdata
 # TODO: add parameters for `sampler`, `pin_memory`, `drop_last`
 class XArrayDataLoader:
     def __init__(
@@ -314,7 +313,7 @@ class XArrayDataLoader:
             a single instance?)
         variables : Union[str, List[str]]
             What variables to load data from.
-        transform : Optional[Callable[[Dict[str, NDArray]], Dict[str, NDArray]]], optional
+        transform : Optional[Callable[[Dict[str, NDArray]], Dict[str, NDArray]]]
             A function to transform batches after loading them into memory. Should take
             a dictionary of numpy arrays, each corresponding to a `variable`, transform
             them, and return the result as a dictionary with the same keys. By default
@@ -349,7 +348,7 @@ class XArrayDataLoader:
 
         1. Load contiguous chunks of data from the dataset into buffers that are larger
         than the batch size.
-        2. Yield batches from the buffer until the buffer is empty, then repeat 1.
+        2. Yield batches from the buffer until the buffer is empty, then repeat.
 
         **Random shuffling**
 
@@ -376,34 +375,14 @@ class XArrayDataLoader:
 
         self.sdata = sdata
         self.variables = variables
-        variable = sdata[variables[0]]
-        self.first_variable = variable
-
-        chunksizes = {}
-        for dim in sample_dims:
-            dim_chunk_sizes = set()
-            for v in sdata[variables].data_vars.values():
-                if dim in v.dims:
-                    dim_chunk_sizes.add(v.data.chunksize[v.get_axis_num(dim)])
-            chunksizes[dim] = dim_chunk_sizes
-        discrepant_chunk_sizes = {k: v for k, v in chunksizes.items() if len(v) > 1}
-        if len(discrepant_chunk_sizes) > 1:
-            raise ValueError(
-                f"""Variables have different chunksizes in the sample dimensions.\n
-                Dimensions with discrepant chunksizes: {list(discrepant_chunk_sizes.keys())}.\n
-                Rechunk the variables in the sample dimensions so they are the same.
-                """
-            )
-        self.chunksizes: Dict[str, int] = {k: v.pop() for k, v in chunksizes.items()}
-
+        # mapping from dimension name to chunksize
+        self.chunksizes = self.get_chunksizes(sdata, sample_dims, variables)
         self.sample_dims = sample_dims
+
         self.instances_per_chunk = np.product(list(self.chunksizes.values()))
         chunks_per_batch = -(-batch_size // self.instances_per_chunk)
         self.n_prefetch_chunks = prefetch_factor * chunks_per_batch
-        sample_dim_shape = [
-            variable.shape[variable.get_axis_num(d)] for d in sample_dims  # type: ignore
-        ]
-        self.n_instances = np.product(sample_dim_shape)
+        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims])
         if batch_size > self.n_instances:
             warnings.warn(
                 f"""Batch size {batch_size} is larger than the number of instances in 
@@ -422,14 +401,31 @@ class XArrayDataLoader:
         self.return_tuples = return_tuples
 
         chunk_start_idx: Dict[str, NDArray[np.int64]] = {}
-        for dim in self.sample_dims:
-            chunk_start_idx[dim] = np.zeros(
-                len(self.first_variable.chunksizes[dim]), dtype=np.int64
-            )
-            np.cumsum(
-                self.first_variable.chunksizes[dim][:-1], out=chunk_start_idx[dim][1:]
-            )
+        for dim in self.chunksizes:
+            length = sdata.sizes[dim]
+            chunksize = self.chunksizes[dim]
+            chunk_start_idx[dim] = np.arange(0, length, chunksize, dtype=np.int64)
         self.chunk_idxs = _cartesian_product(list(chunk_start_idx.values()))
+
+    def get_chunksizes(
+        self, sdata: xr.Dataset, sample_dims: List[str], variables: List[str]
+    ):
+        chunksizes: Dict[str, Set[int]] = {}
+        for dim in sample_dims:
+            dim_chunk_sizes = set()
+            for v in sdata[variables].data_vars.values():
+                if dim in v.dims:
+                    dim_chunk_sizes.add(v.data.chunksize[v.get_axis_num(dim)])
+            chunksizes[dim] = dim_chunk_sizes
+        discrepant_chunk_sizes = {k: v for k, v in chunksizes.items() if len(v) > 1}
+        if len(discrepant_chunk_sizes) > 1:
+            raise ValueError(
+                f"""Variables have different chunksizes in the sample dimensions.\n
+                Dimensions with discrepant chunksizes: {list(discrepant_chunk_sizes.keys())}.\n
+                Rechunk the variables in the sample dimensions so they are the same.
+                """
+            )
+        return {k: v.pop() for k, v in chunksizes.items()}
 
     def __len__(self):
         return self.max_batches
@@ -449,6 +445,7 @@ class XArrayDataLoader:
         return self
 
     def _flush_and_fill_buffers(self):
+        """Flush buffers and fill them with new data."""
         # Each buffer in buffers will have shape (self.buffer_size, ...)
         self.buffers: Dict[str, NDArray] = {}
         # (n_chunks, n_dim)
@@ -457,6 +454,7 @@ class XArrayDataLoader:
             self.chunk_slice.start, self.chunk_slice.start + self.n_prefetch_chunks
         )
         for var in self.variables:
+            var_dims = [d for d in self.sdata[var].dims if d in self.sample_dims]
             buffer = []
             for chunk in chunk_idx:
                 selector = {
@@ -464,7 +462,11 @@ class XArrayDataLoader:
                     for start, d in zip(chunk, self.sample_dims)
                 }
                 buffer.append(
-                    self.sdata[var].isel(selector, missing_dims="ignore").to_numpy()
+                    self.sdata[var]
+                    .isel(selector, missing_dims="ignore")
+                    .stack(batch=var_dims)
+                    .transpose("batch", ...)
+                    .to_numpy()
                 )
             buffer = np.concatenate(buffer)
             self.buffers[var] = self.rng.permutation(buffer) if self.shuffle else buffer
