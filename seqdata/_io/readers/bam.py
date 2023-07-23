@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, Generic, List, Literal, Optional, Type, Union, cast
 
 import joblib
@@ -12,7 +13,7 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from seqdata._io.utils import _get_row_batcher
-from seqdata.types import DTYPE, ListPathType, PathType, RegionReader
+from seqdata.types import DTYPE, PathType, RegionReader
 
 ### pysam implementation NOTE ###
 
@@ -22,28 +23,35 @@ from seqdata.types import DTYPE, ListPathType, PathType, RegionReader
 # end > reference length => truncates interval
 
 
-class Tn5CountMethod(str, Enum):
-    CUTSITE = "tn5-cutsite"
-    MIDPOINT = "tn5-midpoint"
-    FRAGMENT = "tn5-fragment"
+class CountMethod(str, Enum):
+    DEPTH = "depth-only"
+    TN5_CUTSITE = "tn5-cutsite"
+    TN5_FRAGMENT = "tn5-fragment"
 
 
 class BAM(RegionReader, Generic[DTYPE]):
     def __init__(
         self,
         name: str,
-        bams: ListPathType,
-        samples: List[str],
+        bams: Union[str, Path, List[str], List[Path]],
+        samples: Union[str, List[str]],
         batch_size: int,
         n_jobs=1,
         threads_per_job=1,
         dtype: Union[str, Type[np.number]] = np.uint16,
         sample_dim: Optional[str] = None,
         offset_tn5=False,
-        count_method: Literal[
-            "depth-only", "tn5-cutsite", "tn5-midpiont", "tn5-fragment"
+        count_method: Union[
+            CountMethod, Literal["depth-only", "tn5-cutsite", "tn5-fragment"]
         ] = "depth-only",
     ) -> None:
+        if isinstance(bams, str):
+            bams = [bams]
+        elif isinstance(bams, Path):
+            bams = [bams]
+        if isinstance(samples, str):
+            samples = [samples]
+
         self.name = name
         self.bams = bams
         self.samples = samples
@@ -53,11 +61,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
         self.offset_tn5 = offset_tn5
-        if count_method != "depth-only":
-            _count_method = Tn5CountMethod(count_method)
-        else:
-            _count_method = count_method
-        self.count_method = _count_method
+        self.count_method = CountMethod(count_method)
 
     def _write(
         self,
@@ -194,9 +198,9 @@ class BAM(RegionReader, Generic[DTYPE]):
         length = end - start
         out_array = np.zeros(length, dtype=self.dtype)
 
-        read_cache: Dict[str, Any] = {}
+        read_cache: Dict[str, pysam.AlignedSegment] = {}
 
-        for read in f.fetch(contig, max(0, start), end):
+        for i, read in enumerate(f.fetch(contig, max(0, start), end)):
             if not read.is_proper_pair or read.is_secondary:
                 continue
 
@@ -213,31 +217,58 @@ class BAM(RegionReader, Generic[DTYPE]):
                 reverse_read = read_cache.pop(read.query_name)
 
             # Shift read if accounting for offset
+            forward_start = forward_read.reference_start - start
+            reverse_end = cast(int, reverse_read.reference_end) - end
+
             if self.offset_tn5:
-                forward_start: int = forward_read.reference_start + 4
+                forward_start += 4
                 # 0 based, 1 past aligned
-                reverse_end: int = reverse_read.reference_end - 5
-            else:
-                forward_start = forward_read.reference_start
-                reverse_end = reverse_read.reference_end
+                reverse_end -= 5
 
             # Check count method
-            if self.count_method is Tn5CountMethod.CUTSITE:
+            if self.count_method is CountMethod.TN5_CUTSITE:
                 # Add cut sites to out_array
                 out_array[[forward_start, (reverse_end - 1)]] += 1
-            elif self.count_method is Tn5CountMethod.MIDPOINT:
-                # Add midpoint to out_array
-                out_array[int((forward_start + (reverse_end - 1)) / 2)] += 1
-            elif self.count_method is Tn5CountMethod.FRAGMENT:
+            elif self.count_method is CountMethod.TN5_FRAGMENT:
                 # Add range to out array
                 out_array[forward_start:reverse_end] += 1
+
+        # if any reads are still in the cache, then their mate isn't in the region
+        for read in read_cache.values():
+            # for reverse reads, their mate is in the 5' <- direction
+            if read.is_reverse:
+                read_end = cast(int, read.reference_end) - end
+                if self.offset_tn5:
+                    read_end -= 5
+                    if read_end < 0:
+                        continue
+                if self.count_method is CountMethod.TN5_CUTSITE:
+                    out_array[read_end - 1] += 1
+                elif self.count_method is CountMethod.TN5_FRAGMENT:
+                    out_array[:read_end] += 1
+            # for forward reads, their mate is in the 3' -> direction
+            else:
+                read_start = read.reference_start - start
+                if self.offset_tn5:
+                    read_start += 4
+                    if read_start >= end:
+                        continue
+                if self.count_method is CountMethod.TN5_CUTSITE:
+                    out_array[read_start] += 1
+                elif self.count_method is CountMethod.TN5_FRAGMENT:
+                    out_array[read_start:] += 1
 
         return out_array
 
     def _count_depth_only(
         self, f: pysam.AlignmentFile, contig: str, start: int, end: int
     ):
-        a, c, g, t = f.count_coverage(contig, max(start, 0), end, read_callback="all")
+        a, c, g, t = f.count_coverage(
+            contig,
+            max(start, 0),
+            end,
+            read_callback=lambda x: x.is_proper_pair and not x.is_secondary,
+        )
         coverage = np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
         if (pad_len := end - start - len(coverage)) > 0:
             pad_arr = np.zeros(pad_len, dtype=self.dtype)
@@ -251,7 +282,7 @@ class BAM(RegionReader, Generic[DTYPE]):
     def _reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
         for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
-            if self.count_method == "depth-only":
+            if self.count_method is CountMethod.DEPTH:
                 coverage = self._count_depth_only(f, contig, start, end)
             else:
                 coverage = self._count_tn5(f, contig, start, end)
@@ -266,7 +297,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             for row in rows:
                 pbar.update()
                 contig, start, end = row[:3]
-                if self.count_method == "depth-only":
+                if self.count_method is CountMethod.DEPTH:
                     coverage = self._count_depth_only(f, contig, start, end)
                 else:
                     coverage = self._count_tn5(f, contig, start, end)

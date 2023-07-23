@@ -19,7 +19,7 @@ from .xarray.seqdata import (
 )
 
 try:
-    from .torch import get_torch_dataloader
+    from .torch import XArrayDataLoader, get_torch_dataloader
 
     TORCH_AVAILABLE = True
 except ImportError:
@@ -54,4 +54,5 @@ __all__ = [
     "add_bed_to_sdata",
     "label_overlapping_regions",
     "merge_obs",
+    "XArrayDataLoader",
 ]
