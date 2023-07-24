@@ -127,6 +127,7 @@ class VCF(RegionReader):
             # no variants in region
             if len(positions_alleles) == 0:
                 yield tiled_seq
+                continue
 
             positions_ls, alleles_ls = zip(*positions_alleles)
             # (variants)
