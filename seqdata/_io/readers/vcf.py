@@ -97,7 +97,7 @@ class VCF(RegionReader):
         # (samples haplotypes)
         alleles = v.gt_bases.astype("S").reshape(-1, 1).view("S1")[:, [0, 2]]
         # change unknown to reference
-        alleles[alleles == "."] = v.REF
+        alleles[alleles == b"."] = bytes(v.REF, "ascii")
         # make position 0-indexed
         return v.POS - 1, alleles
 
@@ -117,7 +117,7 @@ class VCF(RegionReader):
             seq_bytes = b"N" * pad_left + seq_bytes + b"N" * pad_right
             seq = cast(NDArray[np.bytes_], np.array([seq_bytes], "S").view("S1"))
             # (samples haplotypes length)
-            tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
+            tiled_seq = np.tile(seq, (len(self.samples), N_HAPLOTYPES, 1))
 
             region = f"{contig}:{max(start, 0)+1}-{end}"
             positions_alleles = [

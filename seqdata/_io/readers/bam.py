@@ -29,6 +29,7 @@ class CountMethod(str, Enum):
     TN5_FRAGMENT = "tn5-fragment"
 
 
+# TODO: write docstring
 class BAM(RegionReader, Generic[DTYPE]):
     def __init__(
         self,
