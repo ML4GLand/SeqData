@@ -54,6 +54,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             samples = [samples]
 
         self.name = name
+        self.total_reads_name = f"total_reads_{name}"
         self.bams = bams
         self.samples = samples
         self.batch_size = batch_size
@@ -95,9 +96,9 @@ class BAM(RegionReader, Generic[DTYPE]):
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
         batch_size = min(len(bed), self.batch_size)
-        z = zarr.open_group(out)
+        root = zarr.open_group(out)
 
-        arr = z.array(
+        arr = root.array(
             self.sample_dim,
             data=np.array(self.samples, object),
             compressor=compressor,
@@ -106,7 +107,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
 
-        coverage = z.zeros(
+        coverage = root.zeros(
             self.name,
             shape=(len(bed), len(self.samples), fixed_length),
             dtype=self.dtype,
@@ -121,10 +122,20 @@ class BAM(RegionReader, Generic[DTYPE]):
             length_dim,
         ]
 
+        total_reads = root.zeros(
+            self.total_reads_name,
+            shape=len(self.samples),
+            dtype=np.uint64,
+            chunks=None,
+            overwrite=overwrite,
+            compressor=compressor,
+        )
+        total_reads.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
+
         sample_idxs = np.arange(len(self.samples))
         tasks = [
             joblib.delayed(self._read_bam_fixed_length)(
-                coverage,
+                root,
                 bam,
                 bed,
                 batch_size,
@@ -151,9 +162,9 @@ class BAM(RegionReader, Generic[DTYPE]):
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
         batch_size = min(len(bed), self.batch_size)
-        z = zarr.open_group(out)
+        root = zarr.open_group(out)
 
-        arr = z.array(
+        arr = root.array(
             self.sample_dim,
             data=np.array(self.samples, object),
             compressor=compressor,
@@ -162,7 +173,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
 
-        coverage = z.empty(
+        coverage = root.empty(
             self.name,
             shape=(len(bed), len(self.samples)),
             dtype=object,
@@ -177,10 +188,20 @@ class BAM(RegionReader, Generic[DTYPE]):
             self.sample_dim,
         ]
 
+        total_reads = root.zeros(
+            self.total_reads_name,
+            shape=len(self.samples),
+            dtype=np.uint64,
+            chunks=None,
+            overwrite=overwrite,
+            compressor=compressor,
+        )
+        total_reads.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
+
         sample_idxs = np.arange(len(self.samples))
         tasks = [
             joblib.delayed(self._read_bam_variable_length)(
-                coverage,
+                root,
                 bam,
                 bed,
                 batch_size,
@@ -194,6 +215,118 @@ class BAM(RegionReader, Generic[DTYPE]):
             "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
         ):
             joblib.Parallel()(tasks)
+
+    def _read_bam_fixed_length(
+        self,
+        root: zarr.Group,
+        bam: PathType,
+        bed: pd.DataFrame,
+        batch_size: int,
+        sample_idx: int,
+        n_threads: int,
+        fixed_length: int,
+        splice: bool,
+    ):
+        blosc.set_nthreads(n_threads)
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        batch = np.zeros((batch_size, fixed_length), self.dtype)
+
+        with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
+
+            def read_cb(x: pysam.AlignedSegment):
+                return x.is_proper_pair and not x.is_secondary
+
+            total_reads = sum([f.count(c, read_callback=read_cb) for c in f.references])
+            root[self.total_reads_name][sample_idx] = total_reads
+
+            reader = self._spliced_reader if splice else self._reader
+            row_batcher = _get_row_batcher(reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
+                batch[idx] = out
+                if is_last_in_batch or is_last_row:
+                    _batch = batch[: idx + 1]
+                    to_rc_mask = to_rc[start : start + idx + 1]
+                    _batch[to_rc_mask] = _batch[to_rc_mask, ::-1]
+                    root[self.name][start : start + idx + 1, sample_idx] = _batch
+
+    def _read_bam_variable_length(
+        self,
+        root: zarr.Group,
+        bam: PathType,
+        bed: pd.DataFrame,
+        batch_size: int,
+        sample_idx: int,
+        n_threads: int,
+        splice: bool,
+    ):
+        blosc.set_nthreads(n_threads)
+        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+
+        batch = np.empty(batch_size, object)
+
+        with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
+
+            def read_cb(x: pysam.AlignedSegment):
+                return x.is_proper_pair and not x.is_secondary
+
+            total_reads = sum([f.count(c, read_callback=read_cb) for c in f.references])
+            root[self.total_reads_name][sample_idx] = total_reads
+
+            reader = self._spliced_reader if splice else self._reader
+            row_batcher = _get_row_batcher(reader(bed, f), batch_size)
+            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
+                if to_rc[idx]:
+                    out = out[::-1]
+                batch[idx] = out
+                if is_last_in_batch or is_last_row:
+                    root[self.name][start : start + idx + 1, sample_idx] = batch[
+                        : idx + 1
+                    ]
+
+    def _reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
+        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
+            contig, start, end = row[:3]
+            if self.count_method is CountMethod.DEPTH:
+                coverage = self._count_depth_only(f, contig, start, end)
+            else:
+                coverage = self._count_tn5(f, contig, start, end)
+            yield coverage
+
+    def _spliced_reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
+        pbar = tqdm(total=len(bed))
+        for rows in split_when(
+            bed.itertuples(index=False), lambda x, y: x.name != y.name
+        ):
+            unspliced: List[NDArray[Any]] = []
+            for row in rows:
+                pbar.update()
+                contig, start, end = row[:3]
+                if self.count_method is CountMethod.DEPTH:
+                    coverage = self._count_depth_only(f, contig, start, end)
+                else:
+                    coverage = self._count_tn5(f, contig, start, end)
+                unspliced.append(coverage)
+            yield cast(NDArray[DTYPE], np.concatenate(coverage))  # type: ignore
+
+    def _count_depth_only(
+        self, f: pysam.AlignmentFile, contig: str, start: int, end: int
+    ):
+        a, c, g, t = f.count_coverage(
+            contig,
+            max(start, 0),
+            end,
+            read_callback=lambda x: x.is_proper_pair and not x.is_secondary,
+        )
+        coverage = np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
+        if (pad_len := end - start - len(coverage)) > 0:
+            pad_arr = np.zeros(pad_len, dtype=self.dtype)
+            pad_left = start < 0
+            if pad_left:
+                coverage = np.concatenate([pad_arr, coverage])
+            else:
+                coverage = np.concatenate([coverage, pad_arr])
+        return coverage
 
     def _count_tn5(self, f: pysam.AlignmentFile, contig: str, start: int, end: int):
         length = end - start
@@ -260,99 +393,3 @@ class BAM(RegionReader, Generic[DTYPE]):
                     out_array[read_start:] += 1
 
         return out_array
-
-    def _count_depth_only(
-        self, f: pysam.AlignmentFile, contig: str, start: int, end: int
-    ):
-        a, c, g, t = f.count_coverage(
-            contig,
-            max(start, 0),
-            end,
-            read_callback=lambda x: x.is_proper_pair and not x.is_secondary,
-        )
-        coverage = np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
-        if (pad_len := end - start - len(coverage)) > 0:
-            pad_arr = np.zeros(pad_len, dtype=self.dtype)
-            pad_left = start < 0
-            if pad_left:
-                coverage = np.concatenate([pad_arr, coverage])
-            else:
-                coverage = np.concatenate([coverage, pad_arr])
-        return coverage
-
-    def _reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
-        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
-            contig, start, end = row[:3]
-            if self.count_method is CountMethod.DEPTH:
-                coverage = self._count_depth_only(f, contig, start, end)
-            else:
-                coverage = self._count_tn5(f, contig, start, end)
-            yield coverage
-
-    def _spliced_reader(self, bed: pd.DataFrame, f: pysam.AlignmentFile):
-        pbar = tqdm(total=len(bed))
-        for rows in split_when(
-            bed.itertuples(index=False), lambda x, y: x.name != y.name
-        ):
-            unspliced: List[NDArray[Any]] = []
-            for row in rows:
-                pbar.update()
-                contig, start, end = row[:3]
-                if self.count_method is CountMethod.DEPTH:
-                    coverage = self._count_depth_only(f, contig, start, end)
-                else:
-                    coverage = self._count_tn5(f, contig, start, end)
-                unspliced.append(coverage)
-            yield cast(NDArray[DTYPE], np.concatenate(coverage))  # type: ignore
-
-    def _read_bam_fixed_length(
-        self,
-        coverage: zarr.Array,
-        bam: PathType,
-        bed: pd.DataFrame,
-        batch_size: int,
-        sample_idx: int,
-        n_threads: int,
-        fixed_length: int,
-        splice: bool,
-    ):
-        blosc.set_nthreads(n_threads)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
-
-        batch = np.zeros((batch_size, fixed_length), self.dtype)
-
-        with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
-            reader = self._spliced_reader if splice else self._reader
-            row_batcher = _get_row_batcher(reader(bed, f), batch_size)
-            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
-                batch[idx] = out
-                if is_last_in_batch or is_last_row:
-                    _batch = batch[: idx + 1]
-                    to_rc_mask = to_rc[start : start + idx + 1]
-                    _batch[to_rc_mask] = _batch[to_rc_mask, ::-1]
-                    coverage[start : start + idx + 1, sample_idx] = _batch
-
-    def _read_bam_variable_length(
-        self,
-        coverage: zarr.Array,
-        bam: PathType,
-        bed: pd.DataFrame,
-        batch_size: int,
-        sample_idx: int,
-        n_threads: int,
-        splice: bool,
-    ):
-        blosc.set_nthreads(n_threads)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
-
-        batch = np.empty(batch_size, object)
-
-        with pysam.AlignmentFile(str(bam), threads=n_threads) as f:
-            reader = self._spliced_reader if splice else self._reader
-            row_batcher = _get_row_batcher(reader(bed, f), batch_size)
-            for is_last_row, is_last_in_batch, out, idx, start in row_batcher:
-                if to_rc[idx]:
-                    out = out[::-1]
-                batch[idx] = out
-                if is_last_in_batch or is_last_row:
-                    coverage[start : start + idx + 1, sample_idx] = batch[: idx + 1]
