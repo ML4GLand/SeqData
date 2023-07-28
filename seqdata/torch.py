@@ -448,6 +448,7 @@ class XArrayDataLoader:
         """Flush buffers and fill them with new data."""
         # Each buffer in buffers will have shape (self.buffer_size, ...)
         self.buffers: Dict[str, NDArray] = {}
+        shuffler = None
         # (n_chunks, n_dim)
         chunk_idx = self.chunk_idxs[self.chunk_slice]
         self.chunk_slice = slice(
@@ -469,14 +470,11 @@ class XArrayDataLoader:
                     .to_numpy()
                 )
             buffer = np.concatenate(buffer)
-            self.buffers[var] = self.rng.permutation(buffer) if self.shuffle else buffer
-
-    def _apply_dtypes(self, batch: Dict[str, NDArray]):
-        out = {
-            k: torch.as_tensor(v, dtype=dtype)
-            for (k, dtype), v in zip(self.dtypes.items(), batch.values())
-        }
-        return out
+            if shuffler is None:
+                shuffler = self.rng.permutation(len(buffer))
+            if self.shuffle:
+                buffer = buffer[shuffler]
+            self.buffers[var] = buffer
 
     def __next__(self):
         if self.current_batch == self.max_batches:
@@ -524,4 +522,11 @@ class XArrayDataLoader:
         if self.return_tuples:
             return tuple(out.values())
 
+        return out
+
+    def _apply_dtypes(self, batch: Dict[str, NDArray]):
+        out = {
+            k: torch.as_tensor(v, dtype=dtype)
+            for (k, dtype), v in zip(self.dtypes.items(), batch.values())
+        }
         return out
