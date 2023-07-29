@@ -75,7 +75,7 @@ class VCF(RegionReader):
         _vcf = cyvcf2.VCF(str(vcf), samples=samples)
         self.samples = _vcf.samples if samples is None else samples
         try:
-            vcf_contigs = cast(Set[str], set(_vcf.seqlens))
+            vcf_contigs = cast(Set[str], set(_vcf.seqnames))
         except AttributeError:
             warnings.warn("VCF header has no contig annotations.")
             vcf_contigs: Set[str] = set()
@@ -89,7 +89,9 @@ class VCF(RegionReader):
         contigs_exclusive_to_vcf = natsorted(vcf_contigs - fasta_contigs)
         if contigs_exclusive_to_vcf:
             warnings.warn(
-                f"VCF has contigs not found in FASTA: {contigs_exclusive_to_vcf}"
+                f"""VCF has contigs not found in FASTA that may indicate variant calling
+                was against a different reference than what was given to SeqData.
+                Contigs that are exclusive to the VCF are: {contigs_exclusive_to_vcf}"""
             )
 
     def _get_pos_alleles(self, v) -> Tuple[int, NDArray[np.bytes_]]:

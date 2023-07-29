@@ -393,7 +393,6 @@ class XArrayDataLoader:
         else:
             self.batch_size = batch_size
         self.max_batches = -(-self.n_instances // self.batch_size)
-        self.buffer_size = self.instances_per_chunk * self.n_prefetch_chunks
 
         self.rng = np.random.default_rng(seed)
         self.shuffle = shuffle
@@ -491,7 +490,6 @@ class XArrayDataLoader:
         # buffers don't have enough data to fill the batch
         if overshoot > 0:
             # grab what they do have
-            self.buffer_slice = slice(self.buffer_slice.start, self.buffer_size)
             self.batch_slice = slice(0, self.batch_size - overshoot)
             for var, buffer in self.buffers.items():
                 batch[var][self.batch_slice] = buffer[self.buffer_slice]
