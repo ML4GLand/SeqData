@@ -46,6 +46,35 @@ class BAM(RegionReader, Generic[DTYPE]):
             CountMethod, Literal["depth-only", "tn5-cutsite", "tn5-fragment"]
         ] = "depth-only",
     ) -> None:
+        """Reader for BAM files.
+
+        Parameters
+        ----------
+        name : str
+            Name of the array this reader will write.
+        bams : Union[str, Path, List[str], List[Path]]
+            Path or a list of paths to BAM(s).
+        samples : Union[str, List[str]]
+            Sample names for each BAM.
+        batch_size : int
+            Number of sequences to write at a time. Note this also sets the chunksize
+            along the sequence dimension.
+        n_jobs : int, optional
+            Number of BAMs to process in parallel, by default 1, which disables
+            multiprocessing. Don't set this higher than the number of BAMs or number of
+            cores available.
+        threads_per_job : int, optional
+            Threads to use per job, by default 1. Make sure the number of available
+            cores is >= n_jobs * threads_per_job.
+        dtype : Union[str, Type[np.number]], optional
+            Data type to write the coverage as, by default np.uint16.
+        sample_dim : Optional[str], optional
+            Name of the sample dimension, by default None
+        offset_tn5 : bool, optional
+            Whether to adjust read lengths to account for Tn5 binding, by default False
+        count_method : Union[CountMethod, Literal["depth-only", "tn5-cutsite", "tn5-fragment"]]
+            Count method, by default "depth-only"
+        """
         if isinstance(bams, str):
             bams = [bams]
         elif isinstance(bams, Path):
@@ -339,7 +368,7 @@ class BAM(RegionReader, Generic[DTYPE]):
                 continue
 
             if read.query_name not in read_cache:
-                read_cache[read.query_name] = read
+                read_cache[read.query_name] = read  # type: ignore
                 continue
 
             # Forward and Reverse w/o r1 and r2
@@ -385,7 +414,7 @@ class BAM(RegionReader, Generic[DTYPE]):
                 read_start = read.reference_start - start
                 if self.offset_tn5:
                     read_start += 4
-                    if read_start >= end:
+                    if read_start >= end - 1:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
                     out_array[read_start] += 1
