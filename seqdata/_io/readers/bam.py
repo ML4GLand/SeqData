@@ -391,7 +391,10 @@ class BAM(RegionReader, Generic[DTYPE]):
             # Check count method
             if self.count_method is CountMethod.TN5_CUTSITE:
                 # Add cut sites to out_array
-                out_array[[rel_start, (rel_end - 1)]] += 1
+                if rel_start >= 0 and rel_start < length:
+                    out_array[rel_start] += 1
+                if rel_end >= 0 and rel_end < length:
+                    out_array[rel_end] += 1
             elif self.count_method is CountMethod.TN5_FRAGMENT:
                 # Add range to out array
                 out_array[rel_start:rel_end] += 1
