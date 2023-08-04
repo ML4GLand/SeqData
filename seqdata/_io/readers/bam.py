@@ -406,10 +406,10 @@ class BAM(RegionReader, Generic[DTYPE]):
                 rel_end = cast(int, read.reference_end) - start
                 if self.offset_tn5:
                     rel_end -= 5
-                    if rel_end < 0:
+                    if rel_end < 0 or rel_end >= length:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
-                    out_array[rel_end - 1] += 1
+                    out_array[rel_end] += 1
                 elif self.count_method is CountMethod.TN5_FRAGMENT:
                     out_array[:rel_end] += 1
             # for forward reads, their mate is in the 3' -> direction
@@ -417,7 +417,7 @@ class BAM(RegionReader, Generic[DTYPE]):
                 rel_start = read.reference_start - start
                 if self.offset_tn5:
                     rel_start += 4
-                    if rel_start >= length:
+                    if rel_start < 0 or rel_start >= length:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
                     out_array[rel_start] += 1
