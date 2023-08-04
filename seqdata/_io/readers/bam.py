@@ -414,7 +414,7 @@ class BAM(RegionReader, Generic[DTYPE]):
                 read_start = read.reference_start - start
                 if self.offset_tn5:
                     read_start += 4
-                    if read_start >= end - 1:
+                    if read_start >= length:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
                     out_array[read_start] += 1
