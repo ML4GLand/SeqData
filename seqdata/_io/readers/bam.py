@@ -379,46 +379,46 @@ class BAM(RegionReader, Generic[DTYPE]):
                 forward_read = read
                 reverse_read = read_cache.pop(read.query_name)
 
-            # Shift read if accounting for offset
-            forward_start = forward_read.reference_start - start
-            reverse_end = cast(int, reverse_read.reference_end) - end
+            rel_start = forward_read.reference_start - start
+            rel_end = cast(int, reverse_read.reference_end) - start
 
+            # Shift read if accounting for offset
             if self.offset_tn5:
-                forward_start += 4
+                rel_start += 4
                 # 0 based, 1 past aligned
-                reverse_end -= 5
+                rel_end -= 5
 
             # Check count method
             if self.count_method is CountMethod.TN5_CUTSITE:
                 # Add cut sites to out_array
-                out_array[[forward_start, (reverse_end - 1)]] += 1
+                out_array[[rel_start, (rel_end - 1)]] += 1
             elif self.count_method is CountMethod.TN5_FRAGMENT:
                 # Add range to out array
-                out_array[forward_start:reverse_end] += 1
+                out_array[rel_start:rel_end] += 1
 
         # if any reads are still in the cache, then their mate isn't in the region
         for read in read_cache.values():
             # for reverse reads, their mate is in the 5' <- direction
             if read.is_reverse:
-                read_end = cast(int, read.reference_end) - end
+                rel_end = cast(int, read.reference_end) - start
                 if self.offset_tn5:
-                    read_end -= 5
-                    if read_end < 0:
+                    rel_end -= 5
+                    if rel_end < 0:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
-                    out_array[read_end - 1] += 1
+                    out_array[rel_end - 1] += 1
                 elif self.count_method is CountMethod.TN5_FRAGMENT:
-                    out_array[:read_end] += 1
+                    out_array[:rel_end] += 1
             # for forward reads, their mate is in the 3' -> direction
             else:
-                read_start = read.reference_start - start
+                rel_start = read.reference_start - start
                 if self.offset_tn5:
-                    read_start += 4
-                    if read_start >= length:
+                    rel_start += 4
+                    if rel_start >= length:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
-                    out_array[read_start] += 1
+                    out_array[rel_start] += 1
                 elif self.count_method is CountMethod.TN5_FRAGMENT:
-                    out_array[read_start:] += 1
+                    out_array[rel_start:] += 1
 
         return out_array
