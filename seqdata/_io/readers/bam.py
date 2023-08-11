@@ -29,7 +29,6 @@ class CountMethod(str, Enum):
     TN5_FRAGMENT = "tn5-fragment"
 
 
-# TODO: write docstring
 class BAM(RegionReader, Generic[DTYPE]):
     def __init__(
         self,
@@ -380,12 +379,13 @@ class BAM(RegionReader, Generic[DTYPE]):
                 reverse_read = read_cache.pop(read.query_name)
 
             rel_start = forward_read.reference_start - start
+            # 0-based, 1 past aligned
+            # e.g. start:end == 0:2 == [0, 1] so position of end == 1
             rel_end = cast(int, reverse_read.reference_end) - start
 
             # Shift read if accounting for offset
             if self.offset_tn5:
                 rel_start += 4
-                # 0 based, 1 past aligned
                 rel_end -= 5
 
             # Check count method
@@ -393,8 +393,8 @@ class BAM(RegionReader, Generic[DTYPE]):
                 # Add cut sites to out_array
                 if rel_start >= 0 and rel_start < length:
                     out_array[rel_start] += 1
-                if rel_end >= 0 and rel_end < length:
-                    out_array[rel_end] += 1
+                if rel_end >= 0 and rel_end <= length:
+                    out_array[rel_end - 1] += 1
             elif self.count_method is CountMethod.TN5_FRAGMENT:
                 # Add range to out array
                 out_array[rel_start:rel_end] += 1
@@ -406,10 +406,10 @@ class BAM(RegionReader, Generic[DTYPE]):
                 rel_end = cast(int, read.reference_end) - start
                 if self.offset_tn5:
                     rel_end -= 5
-                    if rel_end < 0 or rel_end >= length:
+                    if rel_end < 0 or rel_end > length:
                         continue
                 if self.count_method is CountMethod.TN5_CUTSITE:
-                    out_array[rel_end] += 1
+                    out_array[rel_end - 1] += 1
                 elif self.count_method is CountMethod.TN5_FRAGMENT:
                     out_array[:rel_end] += 1
             # for forward reads, their mate is in the 3' -> direction
