@@ -284,7 +284,7 @@ def get_torch_dataloader(
     )
 
 
-# TODO: weighted upsampling
+# TODO: test weighted upsampling
 # TODO: allow in-memory sdata
 # TODO: add parameters for `sampler`, `pin_memory`, `drop_last`
 class XArrayDataLoader:
@@ -400,7 +400,13 @@ class XArrayDataLoader:
         self.instances_per_chunk = np.product(list(self.chunksizes.values()))
         chunks_per_batch = -(-batch_size // self.instances_per_chunk)
         self.n_prefetch_chunks = prefetch_factor * chunks_per_batch
-        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims])
+        if self.weights is None:
+            self.n_instances = np.product([sdata.sizes[d] for d in sample_dims])
+        else:
+            n_per_dim = [
+                np.sum(self.weights.get(d, sdata.sizes[d])) for d in sample_dims
+            ]
+            self.n_instances = np.prod(n_per_dim)
         if batch_size > self.n_instances:
             warnings.warn(
                 f"""Batch size {batch_size} is larger than the number of instances in 
@@ -410,7 +416,7 @@ class XArrayDataLoader:
             self.batch_size = self.n_instances
         else:
             self.batch_size = batch_size
-        self.max_batches = -(-self.n_instances // self.batch_size)
+        self.max_batches = -(-self.n_instances // self.batch_size)  # ceil
 
         self.rng = np.random.default_rng(seed)
         self.shuffle = shuffle
