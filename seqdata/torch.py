@@ -284,6 +284,7 @@ def get_torch_dataloader(
     )
 
 
+# TODO: weighted upsampling
 # TODO: allow in-memory sdata
 # TODO: add parameters for `sampler`, `pin_memory`, `drop_last`
 class XArrayDataLoader:
@@ -297,6 +298,7 @@ class XArrayDataLoader:
         batch_size: int = 1,
         prefetch_factor: int = 2,
         shuffle: bool = False,
+        weights: Optional[Dict[str, NDArray]] = None,
         seed: Optional[int] = None,
         return_tuples: bool = False,
     ) -> None:
@@ -330,6 +332,9 @@ class XArrayDataLoader:
             memory usage. A higher prefetch factor improves speed but uses more memory.
         shuffle : bool, optional
             Whether to randomly shuffle the dataset on each epoch, by default False
+        weights : Dict[str, NDArray], optional
+            Dictionary mapping dimensions to weights. The dimensions must be batch
+            dimensions.
         seed : Optional[int], optional
             Seed for random shuffling, by default None
         return_tuples : bool, optional
@@ -354,8 +359,8 @@ class XArrayDataLoader:
 
         We implement random shuffling by prefetching random chunks and then randomly
         sampling data from within those chunks. It is possible (although unlikely) that
-        the data may have structure that isn't randomized due to the lack of fully
-        random sampling.
+        the data may have structure that isn't randomized due to the block random
+        sampling.
         """
         if isinstance(sample_dims, str):
             sample_dims = [sample_dims]
@@ -374,10 +379,23 @@ class XArrayDataLoader:
             self.dtypes = dtypes
 
         self.sdata = sdata
+        self.sdata.assign_coords(
+            {dim: np.arange(size) for dim, size in self.sdata.sizes.items()}
+        )
         self.variables = variables
         # mapping from dimension name to chunksize
         self.chunksizes = self.get_chunksizes(sdata, sample_dims, variables)
         self.sample_dims = sample_dims
+        if weights is not None:
+            if extra_weights := set(weights.keys()) - set(self.sdata.dims):
+                raise ValueError(
+                    f"Got weights for dimensions that are not in the dataset: {extra_weights}"
+                )
+            if extra_weights := set(weights.keys()) - set(sample_dims):
+                raise ValueError(
+                    f"Got weights for dimensions that are not batch dimensions: {extra_weights}"
+                )
+        self.weights = weights
 
         self.instances_per_chunk = np.product(list(self.chunksizes.values()))
         chunks_per_batch = -(-batch_size // self.instances_per_chunk)
@@ -446,34 +464,38 @@ class XArrayDataLoader:
     def _flush_and_fill_buffers(self):
         """Flush buffers and fill them with new data."""
         # Each buffer in buffers will have shape (self.buffer_size, ...)
-        self.buffers: Dict[str, NDArray] = {}
-        shuffler = None
+        buffers: List[xr.Dataset] = []
         # (n_chunks, n_dim)
         chunk_idx = self.chunk_idxs[self.chunk_slice]
         self.chunk_slice = slice(
             self.chunk_slice.start, self.chunk_slice.start + self.n_prefetch_chunks
         )
-        for var in self.variables:
-            var_dims = [d for d in self.sdata[var].dims if d in self.sample_dims]
-            buffer = []
-            for chunk in chunk_idx:
-                selector = {
-                    d: slice(start, start + self.chunksizes[d])
-                    for start, d in zip(chunk, self.sample_dims)
-                }
-                buffer.append(
-                    self.sdata[var]
-                    .isel(selector, missing_dims="ignore")
-                    .stack(batch=var_dims)
-                    .transpose("batch", ...)
-                    .to_numpy()
+        for chunk in chunk_idx:
+            selector = {
+                d: slice(start, start + self.chunksizes[d])
+                for start, d in zip(chunk, self.sample_dims)
+            }
+            self.buffers.append(
+                self.sdata.assign_coords(
+                    {d: np.arange(s.start, s.stop) for d, s in selector.items()}
                 )
-            buffer = np.concatenate(buffer)
-            if shuffler is None:
-                shuffler = self.rng.permutation(len(buffer))
-            if self.shuffle:
-                buffer = buffer[shuffler]
-            self.buffers[var] = buffer
+                .isel(selector)
+                .stack(batch=self.sample_dims)
+                .transpose("batch", ...)
+            )
+        self.buffers = xr.concat(buffers, dim="batch").compute()
+        buffer_idx = np.arange(self.buffers.sizes["batch"])
+
+        if self.weights is not None:
+            buffer_idx_weights = np.prod(
+                [self.weights[d][self.buffers[d]] for d in self.sample_dims], axis=0
+            )
+            buffer_idx = buffer_idx.repeat(buffer_idx_weights)
+
+        if self.shuffle:
+            buffer_idx = self.rng.permutation(buffer_idx)
+
+        self.buffers = self.buffers.isel(batch=buffer_idx)
 
     def __next__(self):
         if self.current_batch == self.max_batches:
@@ -482,17 +504,17 @@ class XArrayDataLoader:
         # init empty batch arrays
         batch: Dict[str, NDArray] = {
             k: np.empty_like(v.data, shape=(self.batch_size, *v.shape[1:]))
-            for k, v in self.buffers.items()
+            for k, v in self.buffers.data_vars.items()
         }
 
-        overshoot = self.buffer_slice.stop - len(self.buffers[self.variables[0]])
+        overshoot = self.buffer_slice.stop - self.buffers.sizes["batch"]
 
         # buffers don't have enough data to fill the batch
         if overshoot > 0:
             # grab what they do have
             self.batch_slice = slice(0, self.batch_size - overshoot)
-            for var, buffer in self.buffers.items():
-                batch[var][self.batch_slice] = buffer[self.buffer_slice]
+            for var, buffer in self.buffers.data_vars.items():
+                batch[var][self.batch_slice] = buffer.to_numpy()[self.buffer_slice]
 
             # fetch more data
             self._flush_and_fill_buffers()
@@ -501,8 +523,8 @@ class XArrayDataLoader:
             self.buffer_slice = slice(0, overshoot)
             self.batch_slice = slice(self.batch_slice.stop, self.batch_size)
 
-        for var, buffer in self.buffers.items():
-            batch[var][self.batch_slice] = buffer[self.buffer_slice]
+        for var, buffer in self.buffers.data_vars.items():
+            batch[var][self.batch_slice] = buffer.to_numpy()[self.buffer_slice]
 
         # setup for next batch
         self.buffer_slice = slice(
@@ -521,6 +543,16 @@ class XArrayDataLoader:
             return tuple(out.values())
 
         return out
+
+    def resample_buffer_idx(self, buffer_idx: NDArray):
+        idx_weights = np.ones(len(buffer_idx))
+        # buffer_idx columns: starts, region_idx, dim1_idx, dim2_idx, ...
+        for i, d in enumerate(self.sample_dims):
+            w = self.weights.get(d, None)
+            if w is not None:
+                idx_weights *= w[buffer_idx[:, i + 2]]
+        idx_weights = np.rint(idx_weights)
+        return buffer_idx.repeat(idx_weights)
 
     def _apply_dtypes(self, batch: Dict[str, NDArray]):
         out = {
