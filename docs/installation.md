@@ -19,11 +19,18 @@ Then, install the package in development mode:
 pip install -e .
 ```
 
-Extras for development `[dev, docs]` can be installed using:
+## Optional dependencies
+If you plan on building PyTorch dataloaders from SeqData objects, you will need to install SeqData with PyTorch:
 
 ```bash
-pip install -e .[dev, docs]
+pip install seqdata[torch]
+```
+
+Extras for development `[docs]` can be installed using:
+
+```bash
+pip install seqdata[docs]
 ```
 
 ## Troubleshooting
-If you have any issues installing, please [open an issue](https://github.com/cartercompbio//issues) on GitHub!
+If you have any issues installing, please [open an issue](https://github.com/ML4GLand/SeqData/issues) on GitHub.
