@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Literal, Optional, Type, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 import joblib
 import numpy as np
@@ -12,10 +12,12 @@ from numpy.typing import NDArray
 from tqdm import tqdm
 
 from seqdata._io.utils import _get_row_batcher
-from seqdata.types import DTYPE, ListPathType, PathType, RegionReader
+from seqdata.types import ListPathType, PathType, RegionReader
 
 
-class BigWig(RegionReader, Generic[DTYPE]):
+class BigWig(RegionReader):
+    DTYPE = np.float32
+
     def __init__(
         self,
         name: str,
@@ -24,7 +26,6 @@ class BigWig(RegionReader, Generic[DTYPE]):
         batch_size: int,
         n_jobs=1,
         threads_per_job=1,
-        dtype: Union[str, Type[np.number]] = np.uint16,
         sample_dim: Optional[str] = None,
     ) -> None:
         self.name = name
@@ -33,7 +34,6 @@ class BigWig(RegionReader, Generic[DTYPE]):
         self.batch_size = batch_size
         self.n_jobs = n_jobs
         self.threads_per_job = threads_per_job
-        self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
 
     def _write(
@@ -98,11 +98,11 @@ class BigWig(RegionReader, Generic[DTYPE]):
         coverage = z.zeros(
             self.name,
             shape=(n_seqs, len(self.samples), fixed_length),
-            dtype=self.dtype,
+            dtype=self.DTYPE,
             chunks=(batch_size, 1, None),
             overwrite=overwrite,
             compressor=compressor,
-            filters=[Delta(self.dtype)],
+            filters=[Delta(self.DTYPE)],
         )
         coverage.attrs["_ARRAY_DIMENSIONS"] = [
             sequence_dim,
@@ -159,8 +159,8 @@ class BigWig(RegionReader, Generic[DTYPE]):
             chunks=(batch_size, 1),
             overwrite=overwrite,
             compressor=compressor,
-            filters=[Delta(self.dtype)],
-            object_codec=VLenArray(self.dtype),
+            filters=[Delta(self.DTYPE)],
+            object_codec=VLenArray(self.DTYPE),
         )
         coverage.attrs["_ARRAY_DIMENSIONS"] = [
             sequence_dim,
@@ -188,23 +188,20 @@ class BigWig(RegionReader, Generic[DTYPE]):
     def _reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
         for row in tqdm(bed.itertuples(index=False), total=len(bed)):
             contig, start, end = row[:3]
+            pad_left = max(-start, 0)
+            pad_right = max(end - contig_lengths[contig], 0)
+            pad_right_idx = end - start - pad_right
+            out = np.empty(end - start, dtype=self.DTYPE)
+            out[:pad_left] = 0
+            out[pad_right_idx:] = 0
             values = cast(
                 NDArray,
                 f.values(
                     contig, max(0, start), min(contig_lengths[contig], end), numpy=True
                 ),
             )
-            values[values == np.nan] = 0
-            values = values.astype(self.dtype)
-            pad_left = max(-start, 0)
-            pad_right = max(end - contig_lengths[contig], 0)
-            values = np.concatenate(
-                [
-                    np.zeros(pad_left, self.dtype),
-                    values,
-                    np.zeros(pad_right, self.dtype),
-                ]
-            )
+            np.nan_to_num(values, copy=False)
+            out[pad_left:pad_right_idx] = values
             yield values
 
     def _spliced_reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
@@ -216,18 +213,15 @@ class BigWig(RegionReader, Generic[DTYPE]):
             for row in rows:
                 pbar.update()
                 contig, start, end = row[:3]
-                values = cast(NDArray, f.values(contig, start, end, numpy=True))
-                values[values == np.nan] = 0
-                values = values.astype(self.dtype)
+                values = np.empty(end - start, dtype=self.DTYPE)
                 pad_left = max(-start, 0)
                 pad_right = max(end - contig_lengths[contig], 0)
-                values = np.concatenate(
-                    [
-                        np.zeros(pad_left, self.dtype),
-                        values,
-                        np.zeros(pad_right, self.dtype),
-                    ]
-                )
+                pad_right_idx = end - start - pad_right
+                values[:pad_left] = 0
+                values[pad_right_idx:] = 0
+                _values = cast(NDArray, f.values(contig, start, end, numpy=True))
+                np.nan_to_num(_values, copy=False)
+                values[pad_left:pad_right_idx] = _values
                 unspliced.append(values)
             yield np.concatenate(unspliced)
 
@@ -245,7 +239,7 @@ class BigWig(RegionReader, Generic[DTYPE]):
         blosc.set_nthreads(n_threads)
         to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
-        batch = np.zeros((batch_size, fixed_length), self.dtype)
+        batch = np.empty((batch_size, fixed_length), dtype=self.DTYPE)
 
         with pyBigWig.open(str(bigwig)) as f:
             if splice:
