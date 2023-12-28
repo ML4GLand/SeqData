@@ -16,7 +16,7 @@ from seqdata.types import ListPathType, PathType, RegionReader
 
 
 class BigWig(RegionReader):
-    DTYPE = np.float32
+    DTYPE = np.float32  # BigWig only supports float32
 
     def __init__(
         self,
