@@ -2,7 +2,7 @@
 name = "seqdata"
 version = "0.0.0"  # managed by poetry-dynamic-versioning
 description = "Annotated sequence data"
-authors = ["David Laub <dlaub@ucsd.edu>", "adamklie <aklie@ucsd.edu>"]
+authors = ["David Laub <dlaub@ucsd.edu>", "Adam Klie <aklie@ucsd.edu>"]
 
 [tool.poetry.dependencies]
 python = "^3.9"
