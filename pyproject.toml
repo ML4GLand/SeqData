@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "seqdata"
-version = "0.1.2"
+version = "0.0.0"  # managed by poetry-dynamic-versioning
 description = "Annotated sequence data"
 authors = ["adamklie <aklie@ucsd.edu>"]
 
@@ -41,9 +41,12 @@ docs = ["Sphinx", "sphinx-autobuild", "sphinx-autodoc-typehints", "sphinxcontrib
 
 [tool.poetry.dev-dependencies]
 
+[tool.poetry-dynamic-versioning]
+enable = true
+
 [build-system]
-requires = ["poetry-core>=1.0.0"]
-build-backend = "poetry.core.masonry.api"
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning>=1.0.0,<2.0.0"]
+build-backend = "poetry_dynamic_versioning.backend"
 
 [tool.isort]
 profile = "black"

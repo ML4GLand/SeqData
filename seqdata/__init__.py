@@ -1,14 +1,7 @@
 """Annotated sequence data"""
-try:
-    import importlib.metadata as importlib_metadata
-except ModuleNotFoundError:
-    import importlib_metadata
-
-package_name = "seqdata"
-__version__ = importlib_metadata.version(package_name)
+__version__ = "0.0.0"  # managed by poetry-dynamic-versioning
 
 from ._io.bed_ops import add_bed_to_sdata, label_overlapping_regions, read_bedlike
-
 from ._io.read import (
     read_bam,
     read_bigwig,
@@ -32,10 +25,12 @@ try:
     TORCH_AVAILABLE = True
 except ImportError:
     TORCH_AVAILABLE = False
+
     def no_torch():
         raise ImportError(
             "Install PyTorch to use functionality from SeqData's torch submodule."
         )
+
     get_torch_dataloader = no_torch
 
 __all__ = [
