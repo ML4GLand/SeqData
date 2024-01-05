@@ -137,7 +137,8 @@ def get_torch_dataloader(
     variables: Union[str, List[str]],
     transforms: Optional[
         Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+            Union[str, Tuple[str, ...]],
+            Callable[[Union[NDArray, Tuple[NDArray, ...]]], NDArray],
         ]
     ] = None,
     dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
@@ -195,7 +196,8 @@ def get_torch_dataloader(
 
     if transforms is None:
         _transforms: Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
+            Union[str, Tuple[str, ...]],
+            Callable[[Union[NDArray, Tuple[NDArray, ...]]], NDArray],
         ] = {}
     else:
         _transforms = transforms
@@ -238,7 +240,9 @@ def get_torch_dataloader(
         }
 
         # select data and convert to numpy
-        out: Union[Tuple[torch.Tensor], Dict[str, NDArray], Dict[str, torch.Tensor]]
+        out: Union[
+            Tuple[torch.Tensor, ...], Dict[str, NDArray], Dict[str, torch.Tensor]
+        ]
         with dask.config.set({"array.slicing.split_large_chunks": False}):
             out = {
                 k: arr.isel(selector, missing_dims="ignore").to_numpy()
@@ -279,7 +283,7 @@ def get_torch_dataloader(
         worker_init_fn=worker_init_fn,
         multiprocessing_context=multiprocessing_context,
         generator=generator,
-        prefetch_factor=prefetch_factor,  # type: ignore
+        prefetch_factor=prefetch_factor,
         persistent_workers=persistent_workers,
     )
 
@@ -303,7 +307,7 @@ class XArrayDataLoader:
         """Get an XArray DataLoader that supports substantially faster out-of-core
         dataloading from chunked storage formats than a PyTorch DataLoader. Note the
         absence of concurrency parameters. This is intentional: concurrent I/O is
-        enabled by instantiating a `dask.distributed.Client`.
+        enabled by instantiating a `dask.distributed.Client` before iteration.
 
         Parameters
         ----------
@@ -379,10 +383,10 @@ class XArrayDataLoader:
         self.chunksizes = self.get_chunksizes(sdata, sample_dims, variables)
         self.sample_dims = sample_dims
 
-        self.instances_per_chunk = np.product(list(self.chunksizes.values()))
+        self.instances_per_chunk = np.product(list(self.chunksizes.values()), dtype=int)
         chunks_per_batch = -(-batch_size // self.instances_per_chunk)
         self.n_prefetch_chunks = prefetch_factor * chunks_per_batch
-        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims])
+        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims], dtype=int)
         if batch_size > self.n_instances:
             warnings.warn(
                 f"""Batch size {batch_size} is larger than the number of instances in 
