@@ -96,6 +96,10 @@ def to_zarr(
     sdata = sdata.reset_encoding()
 
     if isinstance(sdata, xr.Dataset):
+        for coord in sdata.coords.values():
+            if "_FillValue" in coord.attrs:
+                del coord.attrs["_FillValue"]
+
         for arr in sdata.data_vars:
             if "_FillValue" in sdata[arr].attrs:
                 del sdata[arr].attrs["_FillValue"]

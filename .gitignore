@@ -4,6 +4,7 @@ data/
 notebooks/
 requirements.txt
 external/
+scripts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

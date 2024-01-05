@@ -202,7 +202,7 @@ class BigWig(RegionReader):
             )
             np.nan_to_num(values, copy=False)
             out[pad_left:pad_right_idx] = values
-            yield values
+            yield out
 
     def _spliced_reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
         pbar = tqdm(total=len(bed))
