@@ -20,7 +20,7 @@ def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
     else:
         center = (bed["chromStart"] + bed["chromEnd"]) / 2
     bed["chromStart"] = (center - length / 2).round().astype(int)
-    bed["chromEnd"] = bed["chromStart"] + length
+    bed["chromEnd"] = (center + length / 2).round().astype(int)
 
 
 def _expand_regions(bed: pd.DataFrame, expansion_length: int):

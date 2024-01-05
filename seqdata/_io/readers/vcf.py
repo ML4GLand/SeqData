@@ -1,6 +1,6 @@
 import warnings
 from pathlib import Path
-from typing import List, Literal, Optional, Set, Union, cast
+from typing import List, Literal, Optional, Set, Tuple, Union, cast
 
 import cyvcf2
 import numpy as np
@@ -75,7 +75,7 @@ class VCF(RegionReader):
         _vcf = cyvcf2.VCF(str(vcf), samples=samples)
         self.samples = _vcf.samples if samples is None else samples
         try:
-            vcf_contigs = cast(Set[str], set(_vcf.seqlens))
+            vcf_contigs = cast(Set[str], set(_vcf.seqnames))
         except AttributeError:
             warnings.warn("VCF header has no contig annotations.")
             vcf_contigs: Set[str] = set()
@@ -89,14 +89,17 @@ class VCF(RegionReader):
         contigs_exclusive_to_vcf = natsorted(vcf_contigs - fasta_contigs)
         if contigs_exclusive_to_vcf:
             warnings.warn(
-                f"VCF has contigs not found in FASTA: {contigs_exclusive_to_vcf}"
+                f"""VCF has contigs not found in FASTA that may indicate variant calling
+                was against a different reference than what was given to SeqData.
+                Contigs that are exclusive to the VCF are: {contigs_exclusive_to_vcf}"""
             )
 
-    def _get_pos_bases(self, v):
+    def _get_pos_alleles(self, v) -> Tuple[int, NDArray[np.bytes_]]:
         # change to bytes and extract alleles
+        # (samples haplotypes)
         alleles = v.gt_bases.astype("S").reshape(-1, 1).view("S1")[:, [0, 2]]
         # change unknown to reference
-        alleles[alleles == "."] = v.REF
+        alleles[alleles == b"."] = bytes(v.REF, "ascii")
         # make position 0-indexed
         return v.POS - 1, alleles
 
@@ -116,12 +119,19 @@ class VCF(RegionReader):
             seq_bytes = b"N" * pad_left + seq_bytes + b"N" * pad_right
             seq = cast(NDArray[np.bytes_], np.array([seq_bytes], "S").view("S1"))
             # (samples haplotypes length)
-            tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
+            tiled_seq = np.tile(seq, (len(self.samples), N_HAPLOTYPES, 1))
 
             region = f"{contig}:{max(start, 0)+1}-{end}"
-            positions_ls, alleles_ls = zip(
-                *[self._get_pos_bases(v) for v in vcf(region) if v.is_snp]
-            )
+            positions_alleles = [
+                self._get_pos_alleles(v) for v in vcf(region) if v.is_snp
+            ]
+
+            # no variants in region
+            if len(positions_alleles) == 0:
+                yield tiled_seq
+                continue
+
+            positions_ls, alleles_ls = zip(*positions_alleles)
             # (variants)
             relative_positions = cast(NDArray[np.int64], np.array(positions_ls)) - start
             # (samples haplotypes variants)
@@ -156,9 +166,15 @@ class VCF(RegionReader):
                 tiled_seq = np.tile(seq, (len(self.samples), 2, 1))
 
                 region = f"{contig}:{max(start, 0)+1}-{end}"
-                positions_ls, alleles_ls = zip(
-                    *[self._get_pos_bases(v) for v in vcf(region) if v.is_snp]
-                )
+                positions_alleles = [
+                    self._get_pos_alleles(v) for v in vcf(region) if v.is_snp
+                ]
+                # no variants in region
+                if len(positions_alleles) == 0:
+                    unspliced.append(tiled_seq)
+                    continue
+
+                positions_ls, alleles_ls = zip(*positions_alleles)
                 # (variants)
                 relative_positions = (
                     cast(NDArray[np.int64], np.array(positions_ls)) - start

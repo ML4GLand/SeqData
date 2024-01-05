@@ -10,7 +10,7 @@ dependencies:
   - more-itertools
   - natsort
   - numcodecs
-  - numpy
+  - numpy>=1.20
   - pandas
   - pandera
   - polars
@@ -21,3 +21,4 @@ dependencies:
   - typing-extensions
   - xarray>=2023.4.0
   - zarr
+  # - seqpro

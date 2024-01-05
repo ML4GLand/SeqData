@@ -122,7 +122,7 @@ def open_zarr(
 
 
 def to_zarr(
-    sdata: xr.Dataset,
+    sdata: Union[xr.DataArray, xr.Dataset],
     store: PathType,
     chunk_store: Optional[Union[MutableMapping, PathType]] = None,
     mode: Optional[Literal["w", "w-", "a", "r+"]] = None,
@@ -179,17 +179,42 @@ def to_zarr(
     """
     sdata = sdata.reset_encoding()
 
-    for arr in sdata.data_vars.values():
-        if "_FillValue" in arr.attrs:
-            del arr.attrs["_FillValue"]
+    if isinstance(sdata, xr.Dataset):
+        for coord in sdata.coords.values():
+            if "_FillValue" in coord.attrs:
+                del coord.attrs["_FillValue"]
+
+        for arr in sdata.data_vars:
+            if "_FillValue" in sdata[arr].attrs:
+                del sdata[arr].attrs["_FillValue"]
+
+            # rechunk non-uniform chunking
+            # Use chunk size that is:
+            # 1. most frequent
+            # 2. to break ties, largest
+            if sdata[arr].chunksizes is not None:
+                new_chunks = {}
+                for dim, chunk in sdata[arr].chunksizes.items():
+                    if len(chunk) > 1 and (
+                        (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
+                    ):
+                        chunks, counts = np.unique(chunk, return_counts=True)
+                        chunk_size = chunks[counts == counts.max()].max()
+                        new_chunks[dim] = chunk_size
+                    else:
+                        new_chunks[dim] = chunk
+                sdata[arr] = sdata[arr].chunk(new_chunks)
+    else:
+        if "_FillValue" in sdata.attrs:
+            del sdata.attrs["_FillValue"]
 
         # rechunk non-uniform chunking
         # Use chunk size that is:
         # 1. most frequent
         # 2. to break ties, largest
-        if arr.chunksizes is not None:
+        if sdata.chunksizes is not None:
             new_chunks = {}
-            for dim, chunk in arr.chunksizes.items():
+            for dim, chunk in sdata.chunksizes.items():
                 if len(chunk) > 1 and (
                     (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
                 ):
@@ -198,7 +223,7 @@ def to_zarr(
                     new_chunks[dim] = chunk_size
                 else:
                     new_chunks[dim] = chunk
-            arr.chunk(new_chunks)
+            sdata = sdata.chunk(new_chunks)
 
     sdata.to_zarr(
         store=store,
