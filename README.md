@@ -1,9 +1,6 @@
 [![PyPI version](https://badge.fury.io/py/seqexplainer.svg)](https://badge.fury.io/py/seqdata)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/seqdata)
 
-> [!NOTE] 
-> SeqData is under active development. The API has largely been decided on, but may change slightly across versions until the first major release.
-
 <img src="docs/_static/seqdata_xr.png" alt="seqdata xr" width=350>
 
 # SeqData (Annotated sequence data)
