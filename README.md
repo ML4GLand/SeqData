@@ -1,15 +1,29 @@
 [![PyPI version](https://badge.fury.io/py/seqexplainer.svg)](https://badge.fury.io/py/seqdata)
 ![PyPI - Downloads](https://img.shields.io/pypi/dm/seqdata)
 
-> [!NOTE] 
-> SeqData is under active development. The API has largely been decided on, but may change slightly across versions until the first major release.
-
 <img src="docs/_static/seqdata_xr.png" alt="seqdata xr" width=350>
 
 # SeqData (Annotated sequence data)
-SeqData is a Python package for preparing ML-ready genomic sequence datasets. SeqData provides an interface for reading, writing, and manipulating annotated biological sequence data using XArray and Zarr.
 
-See the [documentation](https://seqdata.readthedocs.io/en/latest/) for more information.
+[[documentation](https://seqdata.readthedocs.io/en/latest/)][[tutorials]()]
+
+SeqData is a Python package for preparing ML-ready genomic sequence datasets.
+
+> [!NOTE] 
+> SeqData is under active development. The API has largely been decided on, but may change slightly across versions until the first major release.
+
+## Installation
+
+`pip install seqdata`
+
+## Usage
+
+### Loading data into memory
+
+### Building a dataloader
+
+## Tutorials
+
 
 # Contributing
 This section was modified from https://github.com/pachterlab/kallisto.
