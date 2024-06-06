@@ -33,6 +33,8 @@ except ImportError:
 
     get_torch_dataloader = no_torch
 
+from . import datasets
+
 __all__ = [
     "from_flat_files",
     "from_region_files",
@@ -56,4 +58,5 @@ __all__ = [
     "label_overlapping_regions",
     "merge_obs",
     "XArrayDataLoader",
+    "K562_ATAC_seq",
 ]
