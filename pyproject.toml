@@ -36,6 +36,7 @@ myst-parser = { version = "^2.0.0", extras = ["docs"] }
 nbsphinx = { version = "^0.9.2", extras = ["docs"] }
 pandoc = { version = "^2.3", extras = ["docs"] }
 pyarrow = "^17.0.0"
+pooch = "^1.8.2"
 
 [tool.poetry.extras]
 torch = ["torch"]

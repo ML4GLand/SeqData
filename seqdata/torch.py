@@ -63,8 +63,7 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Dict[str, torch.Tensor]]":
-    ...
+) -> "DataLoader[Dict[str, torch.Tensor]]": ...
 
 
 @overload
@@ -89,8 +88,7 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Tuple[torch.Tensor, ...]]":
-    ...
+) -> "DataLoader[Tuple[torch.Tensor, ...]]": ...
 
 
 @overload
@@ -115,8 +113,7 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, ...]]]":
-    ...
+) -> "DataLoader[Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, ...]]]": ...
 
 
 def get_torch_dataloader(
@@ -185,24 +182,24 @@ def get_torch_dataloader(
         np.arange(np.prod(dim_sizes, dtype=int), dtype=np.intp),  # type: ignore
     )
     data: Dict[Hashable, NDArray] = {
-        k: arr.to_numpy()
-        for k, arr in sdata[variables].transpose(*sample_dims, ...).items()
+        var: arr.to_numpy()
+        for var, arr in sdata[variables].transpose(*sample_dims, ...).items()
     }
 
     def collate_fn(indices: List[np.intp]):
+        # improve performance by sorted indexing
+        # note: assumes order within batch is irrelevant (true for ML)
+        indices.sort()
         _idxs = np.unravel_index(indices, dim_sizes)
 
-        # improve performance by sorted indexing
-        if len(_idxs) == 1:
-            _idxs = _idxs[0]
-            _idxs.sort()
-
-        idxs = {}
+        idxs: Dict[Hashable, Tuple[NDArray[np.integer], ...]] = {}
         for var, arr in sdata[variables].data_vars.items():
-            idxs[var] = [_idxs[i] for i, d in enumerate(sample_dims) if d in arr.dims]
+            idxs[var] = tuple(
+                _idxs[i] for i, d in enumerate(sample_dims) if d in arr.dims
+            )
 
         # select data
-        out = {k: data[k][idxs[k]] for k in data}
+        out = {var: data[var][idxs[var]] for var in data}
         out = cast(Dict[str, NDArray], out)
 
         # apply transforms
