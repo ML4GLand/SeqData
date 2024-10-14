@@ -3,6 +3,7 @@ from itertools import accumulate, chain, repeat
 from typing import (
     Callable,
     Dict,
+    Hashable,
     Iterable,
     List,
     Literal,
@@ -15,7 +16,6 @@ from typing import (
     overload,
 )
 
-import dask.config
 import numpy as np
 import torch
 import xarray as xr
@@ -46,11 +46,7 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[
-        Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
-        ]
-    ] = None,
+    transform: Optional[Callable[[Dict[str, NDArray]], Dict[str, NDArray]]] = None,
     dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples: Literal[False],
@@ -67,8 +63,7 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Dict[str, torch.Tensor]]":
-    ...
+) -> "DataLoader[Dict[str, torch.Tensor]]": ...
 
 
 @overload
@@ -76,11 +71,7 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[
-        Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
-        ]
-    ] = None,
+    transform: Optional[Callable[[Dict[str, NDArray]], Dict[str, NDArray]]] = None,
     dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples: Literal[True],
@@ -97,8 +88,7 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Tuple[torch.Tensor, ...]]":
-    ...
+) -> "DataLoader[Tuple[torch.Tensor, ...]]": ...
 
 
 @overload
@@ -106,11 +96,7 @@ def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[
-        Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
-        ]
-    ] = None,
+    transform: Optional[Callable[[Dict[str, NDArray]], Dict[str, NDArray]]] = None,
     dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples=False,
@@ -127,19 +113,14 @@ def get_torch_dataloader(
     generator=None,
     prefetch_factor: Optional[int] = None,
     persistent_workers: bool = False,
-) -> "DataLoader[Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, ...]]]":
-    ...
+) -> "DataLoader[Union[Dict[str, torch.Tensor], Tuple[torch.Tensor, ...]]]": ...
 
 
 def get_torch_dataloader(
     sdata: xr.Dataset,
     sample_dims: Union[str, List[str]],
     variables: Union[str, List[str]],
-    transforms: Optional[
-        Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
-        ]
-    ] = None,
+    transform: Optional[Callable[[Dict[str, NDArray]], Dict[str, NDArray]]] = None,
     dtypes: Union[torch.dtype, Dict[str, torch.dtype]] = torch.float32,
     *,
     return_tuples=False,
@@ -193,71 +174,42 @@ def get_torch_dataloader(
             f"Got variables that are not in the SeqData: {variables_not_in_ds}"
         )
 
-    if transforms is None:
-        _transforms: Dict[
-            Union[str, Tuple[str]], Callable[[Union[NDArray, Tuple[NDArray]]], NDArray]
-        ] = {}
-    else:
-        _transforms = transforms
-
-    vars_with_transforms = set()
-    for k in _transforms:
-        if isinstance(k, tuple):
-            vars_with_transforms.update(k)
-        else:
-            vars_with_transforms.add(k)
-    transform_vars_not_in_vars = vars_with_transforms - set(variables)
-    if transform_vars_not_in_vars:
-        raise ValueError(
-            f"""Got transforms for variables that are not requested: 
-            {transform_vars_not_in_vars}"""
-        )
-
-    transform_vars_not_in_ds = vars_with_transforms - set(sdata.data_vars.keys())
-    if transform_vars_not_in_ds:
-        raise ValueError(
-            f"""Got transforms for variables that are not in the dataset: 
-            {transform_vars_not_in_ds}"""
-        )
-
     if isinstance(dtypes, torch.dtype):
         dtypes = {k: dtypes for k in variables}
-    dim_sizes = [sdata.dims[d] for d in sample_dims]
-    dataset = _cartesian_product([np.arange(d, dtype=np.uintp) for d in dim_sizes])
+    dim_sizes = [sdata.sizes[d] for d in sample_dims]
+    ravel_indices = cast(
+        NDArray[np.intp],
+        np.arange(np.prod(dim_sizes, dtype=int), dtype=np.intp),  # type: ignore
+    )
+    data: Dict[Hashable, NDArray] = {
+        var: arr.to_numpy()
+        for var, arr in sdata[variables].transpose(*sample_dims, ...).items()
+    }
 
-    def collate_fn(indices: List[NDArray]):
-        idx = np.vstack(indices)
+    def collate_fn(indices: List[np.intp]):
+        # improve performance by sorted indexing
+        # note: assumes order within batch is irrelevant (true for ML)
+        indices.sort()
+        _idxs = np.unravel_index(indices, dim_sizes)
 
-        # avoid Dask PerformanceWarning caused by using an unsorted 1-d indexer
-        if idx.shape[-1] == 1:
-            idx = np.sort(idx, axis=None).reshape(-1, 1)
+        idxs: Dict[Hashable, Tuple[NDArray[np.integer], ...]] = {}
+        for var, arr in sdata[variables].data_vars.items():
+            idxs[var] = tuple(
+                _idxs[i] for i, d in enumerate(sample_dims) if d in arr.dims
+            )
 
-        # make a selector to grab the batch
-        selector = {
-            d: xr.DataArray(idx[:, i], dims="batch") for i, d in enumerate(sample_dims)
-        }
-
-        # select data and convert to numpy
-        out: Union[Tuple[torch.Tensor], Dict[str, NDArray], Dict[str, torch.Tensor]]
-        with dask.config.set({"array.slicing.split_large_chunks": False}):
-            out = {
-                k: arr.isel(selector, missing_dims="ignore").to_numpy()
-                for k, arr in sdata[variables].data_vars.items()
-            }
-            out = cast(Dict[str, NDArray], out)
+        # select data
+        out = {var: data[var][idxs[var]] for var in data}
+        out = cast(Dict[str, NDArray], out)
 
         # apply transforms
-        for k, fn in _transforms.items():
-            if isinstance(k, tuple):
-                _arrs = tuple(out[var] for var in k)
-                out.update(dict(zip(k, fn(_arrs))))
-            else:
-                out[k] = fn(out[k])
+        if transform is not None:
+            out = transform(out)
 
         # convert to torch
-        out = cast(Dict[str, torch.Tensor], out)
         for k in out:
-            out[k] = torch.as_tensor(out[k], dtype=dtypes[k])
+            out[k] = torch.as_tensor(out[k], dtype=dtypes[k])  # type: ignore
+        out = cast(Dict[str, torch.Tensor], out)
 
         # convert to a tuple if desired
         if return_tuples:
@@ -266,7 +218,7 @@ def get_torch_dataloader(
         return out
 
     return DataLoader(
-        dataset,  # type: ignore
+        ravel_indices,  # type: ignore
         batch_size=batch_size,
         shuffle=shuffle,
         sampler=sampler,
@@ -279,7 +231,7 @@ def get_torch_dataloader(
         worker_init_fn=worker_init_fn,
         multiprocessing_context=multiprocessing_context,
         generator=generator,
-        prefetch_factor=prefetch_factor,  # type: ignore
+        prefetch_factor=prefetch_factor,
         persistent_workers=persistent_workers,
     )
 
@@ -303,7 +255,7 @@ class XArrayDataLoader:
         """Get an XArray DataLoader that supports substantially faster out-of-core
         dataloading from chunked storage formats than a PyTorch DataLoader. Note the
         absence of concurrency parameters. This is intentional: concurrent I/O is
-        enabled by instantiating a `dask.distributed.Client`.
+        enabled by instantiating a `dask.distributed.Client` before iteration.
 
         Parameters
         ----------
@@ -379,10 +331,10 @@ class XArrayDataLoader:
         self.chunksizes = self.get_chunksizes(sdata, sample_dims, variables)
         self.sample_dims = sample_dims
 
-        self.instances_per_chunk = np.product(list(self.chunksizes.values()))
+        self.instances_per_chunk = np.product(list(self.chunksizes.values()), dtype=int)
         chunks_per_batch = -(-batch_size // self.instances_per_chunk)
         self.n_prefetch_chunks = prefetch_factor * chunks_per_batch
-        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims])
+        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims], dtype=int)
         if batch_size > self.n_instances:
             warnings.warn(
                 f"""Batch size {batch_size} is larger than the number of instances in 
