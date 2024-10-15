@@ -1,5 +1,5 @@
 """Annotated sequence data"""
-__version__ = "0.0.0"  # managed by poetry-dynamic-versioning
+__version__ = "0.1.2"  # managed by poetry-dynamic-versioning
 
 from ._io.bed_ops import add_bed_to_sdata, label_overlapping_regions, read_bedlike
 from ._io.read import (

@@ -32,6 +32,7 @@ class FlatReader(ABC):
         out : str, Path
             Output file, should be a `.zarr` file.
         fixed_length : bool
+            `int`: length of sequences. `False`: write variable length sequences.
         sequence_dim : str
             Name of sequence dimension.
         length_dim : str

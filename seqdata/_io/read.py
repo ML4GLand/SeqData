@@ -278,7 +278,6 @@ def read_bigwig(
     n_jobs=1,
     threads_per_job=1,
     alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
-    dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
 ) -> "xr.Dataset":
@@ -342,7 +341,6 @@ def read_bigwig(
             batch_size=batch_size,
             n_jobs=n_jobs,
             threads_per_job=threads_per_job,
-            dtype=dtype,
         ),
         path=out,
         fixed_length=fixed_length,
