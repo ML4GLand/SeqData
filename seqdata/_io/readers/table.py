@@ -54,6 +54,8 @@ class Table(FlatReader):
             sep = ","
         elif ".tsv" in table.suffixes:
             sep = "\t"
+        elif ".txt" in table.suffixes:
+            sep = "\t"
         else:
             sep = None
         if sep is None:
