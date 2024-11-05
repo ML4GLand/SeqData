@@ -53,7 +53,7 @@ def get_torch_dataloader(
     batch_size: Optional[int] = 1,
     shuffle: bool = False,
     sampler: Optional[Union["Sampler", Iterable]] = None,
-    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    batch_sampler: Optional[Union["Sampler[List]", Iterable[List]]] = None,
     num_workers: int = 0,
     pin_memory: bool = False,
     drop_last: bool = False,
@@ -78,7 +78,7 @@ def get_torch_dataloader(
     batch_size: Optional[int] = 1,
     shuffle: bool = False,
     sampler: Optional[Union["Sampler", Iterable]] = None,
-    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    batch_sampler: Optional[Union["Sampler[List]", Iterable[List]]] = None,
     num_workers: int = 0,
     pin_memory: bool = False,
     drop_last: bool = False,
@@ -103,7 +103,7 @@ def get_torch_dataloader(
     batch_size: Optional[int] = 1,
     shuffle: bool = False,
     sampler: Optional[Union["Sampler", Iterable]] = None,
-    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    batch_sampler: Optional[Union["Sampler[List]", Iterable[List]]] = None,
     num_workers: int = 0,
     pin_memory: bool = False,
     drop_last: bool = False,
@@ -127,7 +127,7 @@ def get_torch_dataloader(
     batch_size: Optional[int] = 1,
     shuffle=False,
     sampler: Optional[Union["Sampler", Iterable]] = None,
-    batch_sampler: Optional[Union["Sampler[Sequence]", Iterable[Sequence]]] = None,
+    batch_sampler: Optional[Union["Sampler[List]", Iterable[List]]] = None,
     num_workers=0,
     pin_memory=False,
     drop_last=False,
@@ -192,14 +192,15 @@ def get_torch_dataloader(
         indices.sort()
         _idxs = np.unravel_index(indices, dim_sizes)
 
-        idxs: Dict[Hashable, Tuple[NDArray[np.integer], ...]] = {}
-        for var, arr in sdata[variables].data_vars.items():
-            idxs[var] = tuple(
-                _idxs[i] for i, d in enumerate(sample_dims) if d in arr.dims
-            )
-
         # select data
-        out = {var: data[var][idxs[var]] for var in data}
+        out = {
+            var: dat[
+                tuple(_idxs[i] for i, d in enumerate(sample_dims) if d in arr.dims)
+            ]
+            for dat, (var, arr) in zip(
+                data.values(), sdata[variables].data_vars.items()
+            )
+        }
         out = cast(Dict[str, NDArray], out)
 
         # apply transforms
@@ -331,10 +332,10 @@ class XArrayDataLoader:
         self.chunksizes = self.get_chunksizes(sdata, sample_dims, variables)
         self.sample_dims = sample_dims
 
-        self.instances_per_chunk = np.product(list(self.chunksizes.values()), dtype=int)
+        self.instances_per_chunk = np.prod(list(self.chunksizes.values()), dtype=int)
         chunks_per_batch = -(-batch_size // self.instances_per_chunk)
         self.n_prefetch_chunks = prefetch_factor * chunks_per_batch
-        self.n_instances = np.product([sdata.sizes[d] for d in sample_dims], dtype=int)
+        self.n_instances = np.prod([sdata.sizes[d] for d in sample_dims], dtype=int)
         if batch_size > self.n_instances:
             warnings.warn(
                 f"""Batch size {batch_size} is larger than the number of instances in 

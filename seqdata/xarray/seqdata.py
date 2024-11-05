@@ -92,7 +92,7 @@ def open_zarr(
         Whether to use cftime, by default None
     zarr_version : int, optional
         Zarr version to use, by default None
-    
+
     Returns
     -------
     xr.Dataset
@@ -139,7 +139,7 @@ def to_zarr(
 ):
     """Write a xarray object to disk as a Zarr store.
 
-    Makes use of the `to_zarr` method of xarray objects, but modifies 
+    Makes use of the `to_zarr` method of xarray objects, but modifies
     the encoding for cases where the chunking is not uniform.
 
     Parameters
@@ -177,7 +177,7 @@ def to_zarr(
     -------
     None
     """
-    sdata = sdata.reset_encoding()
+    sdata = sdata.drop_encoding()
 
     if isinstance(sdata, xr.Dataset):
         for coord in sdata.coords.values():
@@ -185,45 +185,9 @@ def to_zarr(
                 del coord.attrs["_FillValue"]
 
         for arr in sdata.data_vars:
-            if "_FillValue" in sdata[arr].attrs:
-                del sdata[arr].attrs["_FillValue"]
-
-            # rechunk non-uniform chunking
-            # Use chunk size that is:
-            # 1. most frequent
-            # 2. to break ties, largest
-            if sdata[arr].chunksizes is not None:
-                new_chunks = {}
-                for dim, chunk in sdata[arr].chunksizes.items():
-                    if len(chunk) > 1 and (
-                        (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
-                    ):
-                        chunks, counts = np.unique(chunk, return_counts=True)
-                        chunk_size = chunks[counts == counts.max()].max()
-                        new_chunks[dim] = chunk_size
-                    else:
-                        new_chunks[dim] = chunk
-                sdata[arr] = sdata[arr].chunk(new_chunks)
+            sdata[arr] = _uniform_chunking(sdata[arr])
     else:
-        if "_FillValue" in sdata.attrs:
-            del sdata.attrs["_FillValue"]
-
-        # rechunk non-uniform chunking
-        # Use chunk size that is:
-        # 1. most frequent
-        # 2. to break ties, largest
-        if sdata.chunksizes is not None:
-            new_chunks = {}
-            for dim, chunk in sdata.chunksizes.items():
-                if len(chunk) > 1 and (
-                    (len(set(chunk[:-1])) > 1 or chunk[-2] > chunk[-1])
-                ):
-                    chunks, counts = np.unique(chunk, return_counts=True)
-                    chunk_size = chunks[counts == counts.max()].max()
-                    new_chunks[dim] = chunk_size
-                else:
-                    new_chunks[dim] = chunk
-            sdata = sdata.chunk(new_chunks)
+        sdata = _uniform_chunking(sdata)
 
     sdata.to_zarr(
         store=store,
@@ -242,6 +206,29 @@ def to_zarr(
     )
 
 
+def _uniform_chunking(arr: xr.DataArray):
+    # rechunk if write requirements are broken. namely:
+    # - all chunks except the last are the same size
+    # - the final chunk is <= the size of the rest
+    # Use chunk size that is:
+    # 1. most frequent
+    # 2. to break ties, largest
+    if arr.chunksizes is not None:
+        new_chunks = {}
+        for dim, chunk in arr.chunksizes.items():
+            # > 1 chunk and either the last chunk is different from the rest
+            # or the second to last chunk is larger than the last
+            chunks, counts = np.unique(chunk, return_counts=True)
+            chunk_size = int(chunks[counts == counts.max()].max())
+            new_chunks[dim] = chunk_size
+        if new_chunks != arr.chunksizes:
+            arr = arr.chunk(new_chunks)
+
+    if "_FillValue" in arr.attrs:
+        del arr.attrs["_FillValue"]
+    return arr
+
+
 def from_flat_files(
     *readers: FlatReader,
     path: PathType,
@@ -251,7 +238,7 @@ def from_flat_files(
     overwrite=False,
 ) -> xr.Dataset:
     """Composable function to create a SeqData object from flat files.
-    
+
     Saves a SeqData to disk and open it (without loading it into memory).
     TODO: Tutorials coming soon.
 
@@ -304,7 +291,7 @@ def from_region_files(
     overwrite=False,
 ) -> xr.Dataset:
     """Composable function to create a SeqData object from region based files.
-    
+
     Saves a SeqData to disk and open it (without loading it into memory).
     TODO: Tutorials coming soon.
 
@@ -500,24 +487,24 @@ def add_layers_from_files(
     overwrite=False,
 ):
     raise NotImplementedError
-    if any(map(lambda r: isinstance(r, RegionReader), readers)):
-        bed = sdata[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
+    # if any(map(lambda r: isinstance(r, RegionReader), readers)):
+    #     bed = sdata[["chrom", "chromStart", "chromEnd", "strand"]].to_dataframe()
 
-    for reader in readers:
-        if isinstance(reader, FlatReader):
-            if reader.n_seqs is not None and reader.n_seqs != sdata.sizes["_sequence"]:
-                raise ValueError(
-                    f"""Reader "{reader.name}" has a different number of sequences 
-                    than this SeqData."""
-                )
-            _fixed_length = fixed_length is not False
-            reader._write(out=path, fixed_length=_fixed_length, overwrite=overwrite)
-        elif isinstance(reader, RegionReader):
-            reader._write(
-                out=path,
-                bed=bed,  # type: ignore
-                overwrite=overwrite,
-            )
+    # for reader in readers:
+    #     if isinstance(reader, FlatReader):
+    #         if reader.n_seqs is not None and reader.n_seqs != sdata.sizes["_sequence"]:
+    #             raise ValueError(
+    #                 f"""Reader "{reader.name}" has a different number of sequences
+    #                 than this SeqData."""
+    #             )
+    #         _fixed_length = fixed_length is not False
+    #         reader._write(out=path, fixed_length=_fixed_length, overwrite=overwrite)
+    #     elif isinstance(reader, RegionReader):
+    #         reader._write(
+    #             out=path,
+    #             bed=bed,  # type: ignore
+    #             overwrite=overwrite,
+    #         )
 
-    ds = xr.open_zarr(path, mask_and_scale=False, concat_characters=False)
-    return ds
+    # ds = xr.open_zarr(path, mask_and_scale=False, concat_characters=False)
+    # return ds
