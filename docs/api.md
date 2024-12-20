@@ -17,7 +17,6 @@ These classes are designed to read data from a variety of file formats into a Se
    :toctree: api/
 
    BAM
-   VCF
    BigWig
    FlatFASTA
    GenomeFASTA
@@ -35,7 +34,7 @@ These functions are designed to be used in a composable way to read data from a 
    from_region_files
 ```
 
-## Default readers
+## Default read functions
 These functions are special cases of the composable readers that are designed to be used for common use cases
 
 ```{eval-rst}

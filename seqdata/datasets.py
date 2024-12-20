@@ -27,12 +27,6 @@ def datasets():
                 "plus.bw": "sha256:005ba907136c477754c287113b3479a68121c47368455fef9f19f593e2623462",
                 "minus.bw": "sha256:2ff74b44bea80b1c854a265a1f759a3e1aa7baec10ba20139e39d78d7ea5e1ed",
 
-                # TF motifs
-                "cisBP_human.meme": "sha256:<new_sha256_hash_for_cisBP_human.meme>",
-                "Meuleman_2020.meme": "sha256:<new_sha256_hash_for_Meuleman_2020.meme>",
-
-                # Genome files
-                "gencode_v41_GRCh38.fa.gz": "sha256:<new_sha256_hash_for_gencode_v41_GRCh38.fa.gz>",
             },
             urls={
                 "K562_ATAC-seq.zarr": "https://zenodo.org/records/11415225/files/K562_ATAC-seq.zarr",
@@ -40,9 +34,6 @@ def datasets():
                 "K562_CTCF-ChIP-seq.zarr": "https://zenodo.org/records/11415225/files/K562_CTCF-ChIP-seq.zarr",
                 "plus.bw": "https://zenodo.org/records/11415225/files/plus.bw",
                 "minus.bw": "https://zenodo.org/records/11415225/files/minus.bw",
-                "cisBP_human.meme": "https://zenodo.org/records/11415225/files/cisBP_human.meme",
-                "Meuleman_2020.meme": "https://zenodo.org/records/11415225/files/Meuleman_2020.meme",
-                "gencode_v41_GRCh38.fa.gz": "https://zenodo.org/records/11415225/files/gencode_v41_GRCh38.fa.gz",
             },
         )
     return _datasets
