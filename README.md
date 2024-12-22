@@ -26,8 +26,9 @@ SeqData is a Python package for preparing ML-ready genomic sequence datasets. So
 Although my focus will largely follow my research projects and the feedback I receive from the community, here is a roadmap for what I currently plan to focus on in the next few releases.
 
 - v0.1.0: ✔️ Initial API for reading BAM, FASTA, BigWig and Tabular data and building loading PyTorch dataloaders
-- v0.2.0: ✔️ Improved API for transform composition
-- v0.3.0: SnapATAC2 AnnData interoperability
+- v0.2.0: (WIP) Bug fixes, improved documentation, tutorials, and examples
+- v0.3.0: Improved out of core functionality
+ - v0.0.4 — Interoperability with AnnData and SnapATAC2
 
 ## Usage
 

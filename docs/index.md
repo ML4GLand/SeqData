@@ -1,18 +1,41 @@
-![PyPI - Downloads](https://img.shields.io/pypi/dm/seqdata)
+```{toctree}
+:hidden: true
+:caption: Contents
+:maxdepth: 2
+
+installation
+usage-principles
+tutorials/1_Reading_Tables
+api
+release-notes
+contributing
+```
+
 
 # SeqData -- Annotated biological sequence data
-<img src="_static/seqdata_xr.png" alt="seqdata xr" width=600>
+```{image} https://badge.fury.io/py/SeqData.svg
+:alt: PyPI version
+:target: https://badge.fury.io/py/SeqData
+:class: inline-link
+```
 
-SeqData is a Python package for loading genomics sequenced-based data from a variety of file formats into [xarray](https://xarray.pydata.org/en/stable/) objects. SeqData provides a unified interface for loading two major types of data:
+```{image} https://readthedocs.org/projects/SeqData/badge/?version=latest
+:alt: Documentation Status
+:target: https://SeqData.readthedocs.io/en/latest/index.html
+:class: inline-link
+```
 
-1. Genomic sequences:
-* **TSV** -- explicitly defined sequences in tabular format (e.g. CSV)
-* **FASTA** -- explicitly defined sequences in FASTA format
-* **BED** -- implicitly define sequences corresponding to genomic start and end coordinates
+```{image} https://img.shields.io/pypi/dm/SeqData
+:alt: PyPI - Downloads
+:class: inline-link
+```
 
-2. Read alignment/coverage data (paired with a reference genome):
-* **BAM** -- summarizes read alignments that overlap a genomic region
-* **BigWig** -- summarizes coverage data that overlaps a genomic region
+SeqData is a Python package for preparing ML-ready genomic sequence datasets. Some of the key features of SeqData include:
+
+- Keeps multi-dimensional data in one object (e.g. sequence, coverage, metadata, etc.)
+- Efficiently and flexibly loads of track-based data from BigWig or BAM
+- Fully compatible with PyTorch dataloading
+- Offers out-of-core dataloading from disk to CPU to GPU
 
 SeqData is designed to be used via its Python API.
 
@@ -21,12 +44,4 @@ SeqData is designed to be used via its Python API.
 * Browse the main {doc}`API <api>`
 
 # Contributing
-SeqData is an open-source project and we welcome contributions from the community.
-
-```{toctree}
-:hidden: true
-:maxdepth: 1
-
-installation
-api
-contributors
+SeqData is an open-source project and we welcome {doc}`contributions <contributing>`.

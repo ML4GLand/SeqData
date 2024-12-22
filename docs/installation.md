@@ -26,11 +26,5 @@ If you plan on building PyTorch dataloaders from SeqData objects, you will need 
 pip install seqdata[torch]
 ```
 
-Extras for development `[docs]` can be installed using:
-
-```bash
-pip install seqdata[docs]
-```
-
 ## Troubleshooting
 If you have any issues installing, please [open an issue](https://github.com/ML4GLand/SeqData/issues) on GitHub.
