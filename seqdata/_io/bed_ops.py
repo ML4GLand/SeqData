@@ -1,55 +1,69 @@
 import warnings
 from pathlib import Path
-from typing import List, Literal, Optional, Union
+from typing import List, Literal, Optional, Union, cast
 
-import pandas as pd
-import pandera as pa
+import pandera.polars as pa
 import pandera.typing as pat
 import polars as pl
 import xarray as xr
 import zarr
 from pybedtools import BedTool
 
-from seqdata._io.utils import _polars_df_to_xr_zarr
+from seqdata._io.utils import _df_to_xr_zarr
 from seqdata.types import PathType
 
 
-def _set_uniform_length_around_center(bed: pd.DataFrame, length: int):
+def _set_uniform_length_around_center(bed: pl.DataFrame, length: int) -> pl.DataFrame:
     if "peak" in bed:
-        center = bed["chromStart"] + bed["peak"]
+        center = pl.col("chromStart") + pl.col("peak")
     else:
-        center = (bed["chromStart"] + bed["chromEnd"]) / 2
-    bed["chromStart"] = (center - length / 2).round().astype(int)
-    bed["chromEnd"] = (center + length / 2).round().astype(int)
+        center = (pl.col("chromStart") + pl.col("chromEnd")) / 2
+    return bed.with_columns(
+        chromStart=(center - length / 2).round().cast(pl.Int64),
+        chromEnd=(center + length / 2).round().cast(pl.Int64),
+    )
 
 
-def _expand_regions(bed: pd.DataFrame, expansion_length: int):
-    bed["chromStart"] = bed["chromStart"] - expansion_length
-    bed["chromEnd"] = bed["chromEnd"] + expansion_length
+def _expand_regions(bed: pl.DataFrame, expansion_length: int) -> pl.DataFrame:
+    return bed.with_columns(
+        chromStart=(pl.col("chromStart") - expansion_length),
+        chromEnd=(pl.col("chromEnd") + expansion_length),
+    )
 
 
 def _bed_to_zarr(bed: pl.DataFrame, root: zarr.Group, dim: str, **kwargs):
     bed = bed.with_columns(pl.col(pl.Utf8).fill_null("."))
-    _polars_df_to_xr_zarr(bed, root, dim, **kwargs)
+    _df_to_xr_zarr(bed, root, dim, **kwargs)
 
 
 def add_bed_to_sdata(
     sdata: xr.Dataset,
-    bed: pd.DataFrame,
+    bed: pl.DataFrame,
     col_prefix: Optional[str] = None,
     sequence_dim: Optional[str] = None,
 ):
-    """Add a BED-like DataFrame to a Dataset."""
+    """Add a BED-like DataFrame to a Dataset.
+
+    Parameters
+    ----------
+    sdata : xr.Dataset
+    bed : pl.DataFrame
+    col_prefix : str, optional
+        Prefix to add to the column names of the DataFrame before merging.
+    sequence_dim : str, optional
+        Name of the sequence dimension in the resulting Dataset.
+    """
+    bed_ = bed.to_pandas()
     if col_prefix is not None:
-        bed.columns = [col_prefix + c for c in bed.columns]
+        bed_.columns = [col_prefix + c for c in bed_.columns]
     if sequence_dim is not None:
-        bed.index.name = sequence_dim
-    return sdata.merge(bed.to_xarray())
+        bed_.index.name = sequence_dim
+    return sdata.merge(bed_.to_xarray())
 
 
 def label_overlapping_regions(
     sdata: xr.Dataset,
-    targets: Union[PathType, pd.DataFrame, List[str]],
+    targets: Union[PathType, pl.DataFrame, List[str]],
     mode: Literal["binary", "multitask"],
     label_dim: Optional[str] = None,
     fraction_overlap: Optional[float] = None,
@@ -60,7 +74,7 @@ def label_overlapping_regions(
     Parameters
     ----------
     sdata : xr.Dataset
-    targets : Union[str, Path, pd.DataFrame, List[str]]
+    targets : Union[str, Path, pl.DataFrame, List[str]]
         Either a DataFrame (or path to one) with (for binary classification) at least
         columns ['chrom', 'chromStart', 'chromEnd'], or a list of variable names in
         `sdata` to use that correspond to the ['chrom', 'chromStart', 'chromEnd']
@@ -84,7 +98,7 @@ def label_overlapping_regions(
 
     if isinstance(targets, (str, Path)):
         bed2 = BedTool(targets)
-    elif isinstance(targets, pd.DataFrame):
+    elif isinstance(targets, pl.DataFrame):
         bed2 = BedTool.from_dataframe(targets)
     elif isinstance(targets, list):
         bed2 = BedTool.from_dataframe(sdata[targets].to_dataframe())
@@ -133,7 +147,7 @@ def label_overlapping_regions(
             )
             .to_dummies("label")
             .select(pl.exclude(r"^label_\.$"))
-            .groupby("chrom", "chromStart", "chromEnd", maintain_order=True)
+            .group_by("chrom", "chromStart", "chromEnd", maintain_order=True)
             .agg(pl.exclude(r"^label.*$").first(), pl.col(r"^label.*$").max())
             .select(r"^label.*$")  # (sequences labels)
         )
@@ -147,7 +161,7 @@ def label_overlapping_regions(
         )
 
 
-def read_bedlike(path: PathType) -> pd.DataFrame:
+def read_bedlike(path: PathType) -> pl.DataFrame:
     """Reads a bed-like (BED3+) file as a pandas DataFrame. The file type is inferred
     from the file extension.
 
@@ -183,11 +197,11 @@ class BEDSchema(pa.DataFrameModel):
     thickStart: Optional[pat.Series[int]] = pa.Field(nullable=True)
     thickEnd: Optional[pat.Series[int]] = pa.Field(nullable=True)
     itemRgb: Optional[pat.Series[str]] = pa.Field(nullable=True)
-    blockCount: Optional[pat.Series[pa.UInt]] = pa.Field(nullable=True)
+    blockCount: Optional[pat.Series[pl.UInt64]] = pa.Field(nullable=True)
     blockSizes: Optional[pat.Series[str]] = pa.Field(nullable=True)
     blockStarts: Optional[pat.Series[str]] = pa.Field(nullable=True)
 
-    class Config:
+    class Config:  # type: ignore does not need to inherit from BaseConfig
         coerce = True
 
 
@@ -217,10 +231,10 @@ def _read_bed(bed_path: PathType):
         has_header=False,
         skip_rows=skip_rows,
         new_columns=bed_cols[:n_cols],
-        dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+        schema_overrides={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
-    ).to_pandas()
-    bed = BEDSchema.to_schema()(bed)
+    ).pipe(BEDSchema.validate)  # type: ignore accepts both LazyFrame and DataFrame
+    bed = cast(pl.DataFrame, bed)
     return bed
 
 
@@ -236,11 +250,11 @@ class NarrowPeakSchema(pa.DataFrameModel):
     qValue: pat.Series[float] = pa.Field(nullable=True)
     peak: pat.Series[int] = pa.Field(nullable=True)
 
-    class Config:
+    class Config:  # type: ignore does not need to inherit from BaseConfig
         coerce = True
 
 
-def _read_narrowpeak(narrowpeak_path: PathType) -> pd.DataFrame:
+def _read_narrowpeak(narrowpeak_path: PathType) -> pl.DataFrame:
     with open(narrowpeak_path) as f:
         skip_rows = 0
         while f.readline().startswith(("track", "browser")):
@@ -262,10 +276,10 @@ def _read_narrowpeak(narrowpeak_path: PathType) -> pd.DataFrame:
             "qValue",
             "peak",
         ],
-        dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+        schema_overrides={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
-    ).to_pandas()
-    narrowpeaks = NarrowPeakSchema.to_schema()(narrowpeaks)
+    ).pipe(NarrowPeakSchema.validate)  # type: ignore accepts both LazyFrame and DataFrame
+    narrowpeaks = cast(pl.DataFrame, narrowpeaks)
     return narrowpeaks
 
 
@@ -280,7 +294,7 @@ class BroadPeakSchema(pa.DataFrameModel):
     pValue: pat.Series[float] = pa.Field(nullable=True)
     qValue: pat.Series[float] = pa.Field(nullable=True)
 
-    class Config:
+    class Config:  # type: ignore does not need to inherit from BaseConfig
         coerce = True
 
 
@@ -305,8 +319,8 @@ def _read_broadpeak(broadpeak_path: PathType):
             "pValue",
             "qValue",
         ],
-        dtypes={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
+        schema_overrides={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
-    ).to_pandas()
-    broadpeaks = BroadPeakSchema.to_schema()(broadpeaks)
+    ).pipe(BroadPeakSchema.validate)  # type: ignore accepts both LazyFrame and DataFrame
+    broadpeaks = cast(pl.DataFrame, broadpeaks)
     return broadpeaks

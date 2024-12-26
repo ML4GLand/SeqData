@@ -3,11 +3,17 @@ from typing import Any, Dict, List, Literal, Optional, Union, cast
 
 import joblib
 import numpy as np
-import pandas as pd
+import polars as pl
 import pyBigWig
 import zarr
 from more_itertools import split_when
-from numcodecs import Blosc, Delta, VLenArray, VLenUTF8, blosc
+from numcodecs import (
+    Blosc,
+    Delta,
+    VLenArray,
+    VLenUTF8,
+    blosc,  # type: ignore
+)
 from numpy.typing import NDArray
 from tqdm import tqdm
 
@@ -39,12 +45,12 @@ class BigWig(RegionReader):
     def _write(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         fixed_length: Union[int, Literal[False]],
         sequence_dim: str,
         length_dim: Optional[str] = None,
-        overwrite=False,
         splice=False,
+        overwrite=False,
     ) -> None:
         if self.name in (sequence_dim, self.sample_dim, length_dim):
             raise ValueError(
@@ -73,7 +79,7 @@ class BigWig(RegionReader):
     def _write_fixed_length(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         fixed_length: int,
         sequence_dim: str,
         length_dim: str,
@@ -82,7 +88,7 @@ class BigWig(RegionReader):
     ):
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        n_seqs = bed["name"].nunique() if splice else len(bed)
+        n_seqs = bed["name"].n_unique() if splice else len(bed)
         batch_size = min(n_seqs, self.batch_size)
         z = zarr.open_group(out)
 
@@ -132,14 +138,14 @@ class BigWig(RegionReader):
     def _write_variable_length(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         sequence_dim: str,
         overwrite: bool,
         splice: bool,
     ):
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        n_seqs = bed["name"].nunique() if splice else len(bed)
+        n_seqs = bed["name"].n_unique() if splice else len(bed)
         batch_size = min(n_seqs, self.batch_size)
         z = zarr.open_group(out)
 
@@ -185,8 +191,8 @@ class BigWig(RegionReader):
         ):
             joblib.Parallel()(tasks)
 
-    def _reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
-        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
+    def _reader(self, bed: pl.DataFrame, f, contig_lengths: Dict[str, int]):
+        for row in tqdm(bed.iter_rows(), total=len(bed)):
             contig, start, end = row[:3]
             pad_left = max(-start, 0)
             pad_right = max(end - contig_lengths[contig], 0)
@@ -204,10 +210,11 @@ class BigWig(RegionReader):
             out[pad_left:pad_right_idx] = values
             yield out
 
-    def _spliced_reader(self, bed: pd.DataFrame, f, contig_lengths: Dict[str, int]):
+    def _spliced_reader(self, bed: pl.DataFrame, f, contig_lengths: Dict[str, int]):
         pbar = tqdm(total=len(bed))
         for rows in split_when(
-            bed.itertuples(index=False), lambda x, y: x.name != y.name
+            bed.iter_rows(),
+            lambda x, y: x[3] != y[3],  # 4th column is "name"
         ):
             unspliced: List[NDArray[Any]] = []
             for row in rows:
@@ -229,7 +236,7 @@ class BigWig(RegionReader):
         self,
         coverage: zarr.Array,
         bigwig: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         batch_size: int,
         sample_idx: int,
         n_threads: int,
@@ -260,7 +267,7 @@ class BigWig(RegionReader):
         self,
         coverage: zarr.Array,
         bigwig: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         batch_size: int,
         sample_idx: int,
         n_threads: int,

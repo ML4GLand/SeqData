@@ -4,13 +4,18 @@ from typing import List, Literal, Optional, Set, Tuple, Union, cast
 
 import cyvcf2
 import numpy as np
-import pandas as pd
+import polars as pl
 import pysam
 import seqpro as sp
 import zarr
 from more_itertools import split_when
 from natsort import natsorted
-from numcodecs import Blosc, VLenBytes, VLenUTF8, blosc
+from numcodecs import (
+    Blosc,
+    VLenBytes,
+    VLenUTF8,
+    blosc,  # type: ignore
+)
 from numpy.typing import NDArray
 from tqdm import tqdm
 
@@ -105,12 +110,12 @@ class VCF(RegionReader):
 
     def _reader(
         self,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         f: pysam.FastaFile,
         vcf: cyvcf2.VCF,
         sample_order: NDArray[np.intp],
     ):
-        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
+        for row in tqdm(bed.iter_rows(), total=len(bed)):
             contig, start, end = row[:3]
             start, end = cast(int, start), cast(int, end)
             seq_bytes = f.fetch(contig, max(start, 0), end).encode("ascii")
@@ -143,14 +148,15 @@ class VCF(RegionReader):
 
     def _spliced_reader(
         self,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         f: pysam.FastaFile,
         vcf: cyvcf2.VCF,
         sample_order: NDArray[np.intp],
     ):
         pbar = tqdm(total=len(bed))
         for rows in split_when(
-            bed.itertuples(index=False), lambda x, y: x.name != y.name
+            bed.iter_rows(),
+            lambda x, y: x[3] != y[3],  # 4th column is "name"
         ):
             unspliced: List[NDArray[np.bytes_]] = []
             for row in rows:
@@ -192,12 +198,12 @@ class VCF(RegionReader):
     def _write(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         fixed_length: Union[int, Literal[False]],
         sequence_dim: str,
         length_dim: Optional[str] = None,
-        overwrite=False,
         splice=False,
+        overwrite=False,
     ) -> None:
         if self.name in (sequence_dim, self.sample_dim, self.haplotype_dim, length_dim):
             raise ValueError(
@@ -228,7 +234,7 @@ class VCF(RegionReader):
     def _write_fixed_length(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         fixed_length: int,
         sequence_dim: str,
         length_dim: str,
@@ -238,7 +244,7 @@ class VCF(RegionReader):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        n_seqs = bed["name"].nunique() if splice else len(bed)
+        n_seqs = bed["name"].n_unique() if splice else len(bed)
         batch_size = min(n_seqs, self.batch_size)
 
         z = zarr.open_group(out)
@@ -305,7 +311,7 @@ class VCF(RegionReader):
     def _write_variable_length(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         sequence_dim: str,
         overwrite: bool,
         splice: bool,
@@ -313,7 +319,7 @@ class VCF(RegionReader):
         blosc.set_nthreads(self.n_threads)
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
-        n_seqs = bed["name"].nunique() if splice else len(bed)
+        n_seqs = bed["name"].n_unique() if splice else len(bed)
         batch_size = min(n_seqs, self.batch_size)
 
         z = zarr.open_group(out)
@@ -375,7 +381,7 @@ class VCF(RegionReader):
 
         _vcf.close()
 
-    def _sequence_generator(self, bed: pd.DataFrame, splice=False):
+    def _sequence_generator(self, bed: pl.DataFrame, splice=False):
         to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
 
         _vcf = cyvcf2.VCF(
