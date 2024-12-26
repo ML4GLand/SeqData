@@ -1,12 +1,17 @@
 from typing import List, Literal, Optional, Tuple, Union, cast
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import pysam
 import seqpro as sp
 import zarr
 from more_itertools import split_when
-from numcodecs import Blosc, VLenBytes, VLenUTF8, blosc
+from numcodecs import (
+    Blosc,
+    VLenBytes,
+    VLenUTF8,
+    blosc,  # type: ignore
+)
 from numpy.typing import NDArray
 from tqdm import tqdm
 
@@ -135,8 +140,8 @@ class GenomeFASTA(RegionReader):
         else:
             self.alphabet = alphabet
 
-    def _reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
-        for row in tqdm(bed.itertuples(index=False), total=len(bed)):
+    def _reader(self, bed: pl.DataFrame, f: pysam.FastaFile):
+        for row in tqdm(bed.iter_rows(), total=len(bed)):
             contig, start, end = cast(Tuple[str, int, int], row[:3])
             seq = f.fetch(contig, max(0, start), end).encode("ascii")
             if (pad_len := end - start - len(seq)) > 0:
@@ -147,10 +152,11 @@ class GenomeFASTA(RegionReader):
                     seq += b"N" * pad_len
             yield seq
 
-    def _spliced_reader(self, bed: pd.DataFrame, f: pysam.FastaFile):
+    def _spliced_reader(self, bed: pl.DataFrame, f: pysam.FastaFile):
         pbar = tqdm(total=len(bed))
         for rows in split_when(
-            bed.itertuples(index=False), lambda x, y: x.name != y.name
+            bed.iter_rows(),
+            lambda x, y: x[3] != y[3],  # 4th column is "name"
         ):
             unspliced: List[bytes] = []
             for row in rows:
@@ -170,12 +176,12 @@ class GenomeFASTA(RegionReader):
     def _write(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         fixed_length: Union[int, Literal[False]],
         sequence_dim: str,
         length_dim: Optional[str] = None,
-        overwrite=False,
         splice=False,
+        overwrite=False,
     ) -> None:
         if self.name in (sequence_dim, length_dim):
             raise ValueError("Name cannot be equal to sequence_dim or length_dim.")
@@ -202,7 +208,7 @@ class GenomeFASTA(RegionReader):
     def _write_fixed_length(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         fixed_length: int,
         sequence_dim: str,
         length_dim: str,
@@ -213,7 +219,7 @@ class GenomeFASTA(RegionReader):
         compressor = Blosc("zstd", clevel=7, shuffle=-1)
 
         if splice:
-            n_seqs = bed["name"].nunique()
+            n_seqs = bed["name"].n_unique()
         else:
             n_seqs = len(bed)
         batch_size = min(n_seqs, self.batch_size)
@@ -254,7 +260,7 @@ class GenomeFASTA(RegionReader):
     def _write_variable_length(
         self,
         out: PathType,
-        bed: pd.DataFrame,
+        bed: pl.DataFrame,
         sequence_dim: str,
         overwrite: bool,
         splice: bool,
