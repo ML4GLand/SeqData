@@ -30,9 +30,8 @@ from seqdata.types import DTYPE, PathType, RegionReader
 
 
 class CountMethod(str, Enum):
-    DEPTH = "depth-only"
-    TN5_CUTSITE = "tn5-cutsite"
-    TN5_FRAGMENT = "tn5-fragment"
+    FRAGMENTS = "fragments"
+    ENDS = "ends"
 
 
 class BAM(RegionReader, Generic[DTYPE]):
@@ -46,10 +45,9 @@ class BAM(RegionReader, Generic[DTYPE]):
         threads_per_job=1,
         dtype: Union[str, Type[np.number]] = np.uint16,
         sample_dim: Optional[str] = None,
-        offset_tn5=False,
-        count_method: Union[
-            CountMethod, Literal["depth-only", "tn5-cutsite", "tn5-fragment"]
-        ] = "depth-only",
+        count_method: Union[CountMethod, Literal["fragments", "ends"]] = "fragments",
+        left_shift: Optional[int] = None,
+        right_shift: Optional[int] = None,
     ) -> None:
         """Reader for BAM files.
 
@@ -75,10 +73,12 @@ class BAM(RegionReader, Generic[DTYPE]):
             Data type to write the coverage as, by default np.uint16.
         sample_dim : Optional[str], optional
             Name of the sample dimension, by default None
-        offset_tn5 : bool, optional
-            Whether to adjust read lengths to account for Tn5 binding, by default False
-        count_method : Union[CountMethod, Literal["depth-only", "tn5-cutsite", "tn5-fragment"]]
-            Count method, by default "depth-only"
+        count_method : Union[CountMethod, Literal["fragments", "ends"]], optional
+            Count method, by default "fragments"
+        left_shift : Optional[int], optional
+            Shift the left end of the fragment by this amount, by default None
+        right_shift : Optional[int], optional
+            Shift the right end of the fragment by this amount, by default None
         """
         if isinstance(bams, str):
             bams = [bams]
@@ -96,8 +96,9 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.threads_per_job = threads_per_job
         self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
-        self.offset_tn5 = offset_tn5
         self.count_method = CountMethod(count_method)
+        self.left_shift = left_shift
+        self.right_shift = right_shift
 
     def _write(
         self,
@@ -321,10 +322,7 @@ class BAM(RegionReader, Generic[DTYPE]):
     def _reader(self, bed: pl.DataFrame, f: pysam.AlignmentFile):
         for row in tqdm(bed.iter_rows(), total=len(bed)):
             contig, start, end = row[:3]
-            if self.count_method is CountMethod.DEPTH:
-                coverage = self._count_depth_only(f, contig, start, end)
-            else:
-                coverage = self._count_tn5(f, contig, start, end)
+            coverage = self._count(f, contig, start, end)
             yield coverage
 
     def _spliced_reader(self, bed: pl.DataFrame, f: pysam.AlignmentFile):
@@ -337,33 +335,17 @@ class BAM(RegionReader, Generic[DTYPE]):
             for row in rows:
                 pbar.update()
                 contig, start, end = row[:3]
-                if self.count_method is CountMethod.DEPTH:
-                    coverage = self._count_depth_only(f, contig, start, end)
-                else:
-                    coverage = self._count_tn5(f, contig, start, end)
+                coverage = self._count(f, contig, start, end)
                 unspliced.append(coverage)
             yield cast(NDArray[DTYPE], np.concatenate(coverage))  # type: ignore
 
-    def _count_depth_only(
-        self, f: pysam.AlignmentFile, contig: str, start: int, end: int
-    ):
-        a, c, g, t = f.count_coverage(
-            contig,
-            max(start, 0),
-            end,
-            read_callback=lambda x: x.is_proper_pair and not x.is_secondary,
-        )
-        coverage = np.vstack([a, c, g, t]).sum(0).astype(self.dtype)
-        if (pad_len := end - start - len(coverage)) > 0:
-            pad_arr = np.zeros(pad_len, dtype=self.dtype)
-            pad_left = start < 0
-            if pad_left:
-                coverage = np.concatenate([pad_arr, coverage])
-            else:
-                coverage = np.concatenate([coverage, pad_arr])
-        return coverage
-
-    def _count_tn5(self, f: pysam.AlignmentFile, contig: str, start: int, end: int):
+    def _count(
+        self,
+        f: pysam.AlignmentFile,
+        contig: str,
+        start: int,
+        end: int,
+    ) -> NDArray[DTYPE]:
         length = end - start
         out_array = np.zeros(length, dtype=self.dtype)
 
@@ -391,18 +373,19 @@ class BAM(RegionReader, Generic[DTYPE]):
             rel_end = cast(int, reverse_read.reference_end) - start
 
             # Shift read if accounting for offset
-            if self.offset_tn5:
-                rel_start += 4
-                rel_end -= 5
+            if self.left_shift:
+                rel_start = max(0, rel_start + self.left_shift)
+            if self.right_shift:
+                rel_end = min(length, rel_end + self.right_shift)
 
             # Check count method
-            if self.count_method is CountMethod.TN5_CUTSITE:
+            if self.count_method is CountMethod.ENDS:
                 # Add cut sites to out_array
                 if rel_start >= 0 and rel_start < length:
                     out_array[rel_start] += 1
                 if rel_end >= 0 and rel_end <= length:
                     out_array[rel_end - 1] += 1
-            elif self.count_method is CountMethod.TN5_FRAGMENT:
+            elif self.count_method is CountMethod.FRAGMENTS:
                 # Add range to out array
                 out_array[rel_start:rel_end] += 1
 
@@ -411,24 +394,24 @@ class BAM(RegionReader, Generic[DTYPE]):
             # for reverse reads, their mate is in the 5' <- direction
             if read.is_reverse:
                 rel_end = cast(int, read.reference_end) - start
-                if self.offset_tn5:
-                    rel_end -= 5
+                if self.right_shift:
+                    rel_end = min(length, rel_end + self.right_shift)
                     if rel_end < 0 or rel_end > length:
                         continue
-                if self.count_method is CountMethod.TN5_CUTSITE:
+                if self.count_method is CountMethod.ENDS:
                     out_array[rel_end - 1] += 1
-                elif self.count_method is CountMethod.TN5_FRAGMENT:
+                elif self.count_method is CountMethod.FRAGMENTS:
                     out_array[:rel_end] += 1
             # for forward reads, their mate is in the 3' -> direction
             else:
                 rel_start = read.reference_start - start
-                if self.offset_tn5:
-                    rel_start += 4
+                if self.left_shift:
+                    rel_start = max(0, rel_start + self.left_shift)
                     if rel_start < 0 or rel_start >= length:
                         continue
-                if self.count_method is CountMethod.TN5_CUTSITE:
+                if self.count_method is CountMethod.ENDS:
                     out_array[rel_start] += 1
-                elif self.count_method is CountMethod.TN5_FRAGMENT:
+                elif self.count_method is CountMethod.FRAGMENTS:
                     out_array[rel_start:] += 1
 
         return out_array
