@@ -1,5 +1,5 @@
 import pytest  # noqa
-from pytest_cases import fixture, parametrize_with_cases
+from pytest import fixture, parametrize_with_cases
 
 from seqdata import read_vcf
 

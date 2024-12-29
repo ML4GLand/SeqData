@@ -2,7 +2,7 @@ import tempfile
 
 import numpy as np
 import xarray as xr
-from pytest_cases import fixture
+from pytest import fixture
 
 import seqdata as sd
 

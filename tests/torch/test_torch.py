@@ -6,7 +6,7 @@ import seqpro as sp
 import torch
 import xarray as xr
 from numpy.typing import NDArray
-from pytest_cases import fixture
+from pytest import fixture
 
 import seqdata as sd
 
