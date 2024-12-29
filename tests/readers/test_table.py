@@ -9,7 +9,7 @@ from pytest_cases import fixture
 import seqdata as sd
 
 
-@fixture
+@fixture  # type: ignore
 def gen_table():
     """Dummy dataset with AA, CC, GG, TT sequences."""
 
