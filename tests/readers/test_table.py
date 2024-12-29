@@ -16,9 +16,9 @@ def gen_table():
     ds = xr.Dataset(
         {
             "seq": xr.DataArray(
-                sp.random_seqs((2, 5), sp.DNA, 0), dims=["_seq", "_len"]
+                sp.random_seqs((2, 5), sp.DNA, 0), dims=["_sequence", "_length"]
             ),
-            "target": xr.DataArray([5, 11.2], dims=["_seq"]),
+            "target": xr.DataArray([5, 11.2], dims=["_sequence"]),
         }
     )
     return ds
@@ -28,7 +28,7 @@ def write_table(csv: str, ds: xr.Dataset):
     (
         ds.assign(
             seq=xr.DataArray(
-                ds["seq"].values.view("S5").astype(str).squeeze(), dims=["_seq"]
+                ds["seq"].values.view("S5").astype(str).squeeze(), dims=["_sequence"]
             )
         )
         .to_pandas()
@@ -62,5 +62,5 @@ def test_table(gen_table):
             fixed_length=True,
         )
 
-    for name, da in gen_table.items():
-        np.testing.assert_array_equal(da, ds[name])
+        for name, da in gen_table.items():
+            np.testing.assert_array_equal(da, ds[name])
