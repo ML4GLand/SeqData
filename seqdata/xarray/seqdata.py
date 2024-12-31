@@ -15,7 +15,6 @@ from typing import (
 )
 
 import numpy as np
-import pandas as pd
 import polars as pl
 import xarray as xr
 import zarr
@@ -284,7 +283,7 @@ def from_region_files(
     *readers: RegionReader,
     path: PathType,
     fixed_length: Union[int, bool],
-    bed: Union[PathType, pd.DataFrame],
+    bed: Union[PathType, pl.DataFrame],
     max_jitter=0,
     sequence_dim: Optional[str] = None,
     length_dim: Optional[str] = None,
@@ -309,7 +308,7 @@ def from_region_files(
         from the data.
 
         `False`: write variable length sequences
-    bed : str, Path, pd.DataFrame, optional
+    bed : str, Path, pl.DataFrame, optional
         BED file or DataFrame matching the BED3+ specification describing what regions
         to write.
     max_jitter : int, optional
@@ -346,28 +345,27 @@ def from_region_files(
         _bed = bed
 
     if "strand" not in _bed:
-        _bed["strand"] = "+"
+        _bed = _bed.with_columns(strand=pl.lit("+"))
 
     if not splice:
         if fixed_length is False:
-            _expand_regions(_bed, max_jitter)
+            _bed = _expand_regions(_bed, max_jitter)
         else:
             if fixed_length is True:
                 fixed_length = cast(
                     int,
-                    _bed.loc[0, "chromEnd"] - _bed.loc[0, "chromStart"],  # type: ignore
+                    _bed.item(0, "chromEnd") - _bed.item(0, "chromStart"),
                 )
             fixed_length += 2 * max_jitter
             _set_uniform_length_around_center(_bed, fixed_length)
         _bed_to_zarr(
-            pl.from_pandas(_bed),
+            _bed,
             root,
             sequence_dim,
             compressor=Blosc("zstd", clevel=7, shuffle=-1),
             overwrite=overwrite,
         )
     else:
-        _bed = pl.from_pandas(_bed)
         if max_jitter > 0:
             _bed = _bed.with_columns(
                 pl.when(pl.col("chromStart") == pl.col("chromStart").min().over("name"))
@@ -379,7 +377,7 @@ def from_region_files(
                 .otherwise(pl.col("chromEnd"))
                 .alias("chromEnd"),
             )
-        bed_to_write = _bed.groupby("name").agg(
+        bed_to_write = _bed.group_by("name").agg(
             pl.col(pl.Utf8).first(), pl.exclude(pl.Utf8)
         )
         _bed_to_zarr(
@@ -389,7 +387,6 @@ def from_region_files(
             compressor=Blosc("zstd", clevel=7, shuffle=-1),
             overwrite=overwrite,
         )
-        _bed = _bed.to_pandas()
 
     for reader in readers:
         reader._write(
@@ -437,7 +434,7 @@ class SeqDataAccessor:
 
 def merge_obs(
     sdata: xr.Dataset,
-    obs: Union[xr.Dataset, pd.DataFrame],
+    obs: Union[xr.Dataset, pl.DataFrame],
     on: Optional[str] = None,
     left_on: Optional[str] = None,
     right_on: Optional[str] = None,
@@ -466,9 +463,9 @@ def merge_obs(
         Merged SeqData object.
     """
     if on is None and (left_on is None or right_on is None):
-        raise ValueError
+        raise ValueError("Must provide either `on` or both `left_on` and `right_on`.")
     if on is not None and (left_on is not None or right_on is not None):
-        raise ValueError
+        raise ValueError("Cannot provide both `on` and `left_on` or `right_on`.")
 
     if on is None:
         assert left_on is not None
@@ -482,15 +479,16 @@ def merge_obs(
     if left_on not in sdata.xindexes:
         sdata = sdata.set_coords(left_on).set_xindex(left_on)
 
-    if isinstance(obs, pd.DataFrame):
-        if obs.index.name != right_on:
-            obs = obs.set_index(right_on)
-            obs.index.name = left_on
-            obs = obs.to_xarray()
+    if isinstance(obs, pl.DataFrame):
+        obs_ = obs.to_pandas()
+        if obs_.index.name != right_on:
+            obs_ = obs_.set_index(right_on)
+            obs_.index.name = left_on
+            obs_ = obs_.to_xarray()
             sdata_dim = sdata[left_on].dims[0]
-            obs_dim = obs[left_on].dims[0]
+            obs_dim = obs_[left_on].dims[0]
             if sdata_dim != obs_dim:
-                obs[left_on].rename({obs_dim: sdata_dim})
+                obs_[left_on].rename({obs_dim: sdata_dim})
         sdata = sdata.merge(obs, join=how)  # type: ignore
     elif isinstance(obs, xr.Dataset):
         if right_on not in obs.data_vars:

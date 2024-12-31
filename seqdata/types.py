@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, List, Literal, Optional, TypeVar, Union
 import numpy as np
 
 if TYPE_CHECKING:
-    import pandas as pd
+    import polars as pl
 
 PathType = Union[str, Path]
 ListPathType = Union[List[str], List[Path]]
@@ -50,7 +50,7 @@ class RegionReader(ABC):
     def _write(
         self,
         out: PathType,
-        bed: "pd.DataFrame",
+        bed: "pl.DataFrame",
         fixed_length: Union[int, Literal[False]],
         sequence_dim: str,
         length_dim: Optional[str] = None,
@@ -63,7 +63,7 @@ class RegionReader(ABC):
         ----------
         out : str, Path
             Output file, should be a `.zarr` file.
-        bed : pd.DataFrame
+        bed : pl.DataFrame
             DataFrame corresponding to a BED file.
         fixed_length : int, bool
             `int`: length of sequences. `False`: write variable length sequences.

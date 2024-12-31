@@ -1,5 +1,9 @@
+<<<<<<<< HEAD:tests/experimental/test_vcf.py
 import pytest  # noqa
 from pytest import fixture, parametrize_with_cases
+========
+from pytest_cases import fixture, parametrize_with_cases
+>>>>>>>> 508ebc4088fba492eaeec2bf59624d7aec2d68f0:tests/_test_vcf.py
 
 from seqdata import read_vcf
 

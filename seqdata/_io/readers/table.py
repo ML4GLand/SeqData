@@ -1,10 +1,10 @@
 from functools import partial
 from pathlib import Path
 from textwrap import dedent
-from typing import List, Optional, Union, cast
+from typing import List, Optional, Union
 
 import numpy as np
-import pandas as pd
+import polars as pl
 import zarr
 from numcodecs import Blosc, VLenBytes
 from tqdm import tqdm
@@ -59,20 +59,22 @@ class Table(FlatReader):
         else:
             sep = None
         if sep is None:
-            return pd.read_csv(table, chunksize=self.batch_size, **self.kwargs)
+            return pl.read_csv_batched(table, batch_size=self.batch_size, **self.kwargs)
         else:
-            return pd.read_csv(table, sep=sep, chunksize=self.batch_size, **self.kwargs)
+            return pl.read_csv_batched(
+                table, separator=sep, batch_size=self.batch_size, **self.kwargs
+            )
 
     def _write_first_variable_length(
         self,
-        batch: pd.DataFrame,
+        batch: pl.DataFrame,
         root: zarr.Group,
         compressor,
         sequence_dim: str,
         overwrite: bool,
     ):
-        seqs = batch[self.seq_col].str.encode("ascii").to_numpy()
-        obs = batch.drop(columns=self.seq_col)
+        seqs = batch[self.seq_col].cast(pl.Binary).to_numpy()
+        obs = batch.drop(self.seq_col)
         arr = root.array(
             self.name,
             data=seqs,
@@ -90,14 +92,14 @@ class Table(FlatReader):
             compressor=compressor,
             overwrite=overwrite,
         )
-        first_cols = obs.columns.to_list()
+        first_cols = obs.columns
         return first_cols
 
     def _write_variable_length(
-        self, batch: pd.DataFrame, root: zarr.Group, first_cols: List, table: Path
+        self, batch: pl.DataFrame, root: zarr.Group, first_cols: List, table: Path
     ):
-        seqs = batch[self.seq_col].str.encode("ascii").to_numpy()
-        obs = batch.drop(columns=self.seq_col)
+        seqs = batch[self.seq_col].cast(pl.Binary).to_numpy()
+        obs = batch.drop(self.seq_col)
         if (
             np.isin(obs.columns, first_cols, invert=True).any()
             or np.isin(first_cols, obs.columns, invert=True).any()
@@ -111,20 +113,26 @@ class Table(FlatReader):
                 ).strip()
             )
         root[self.name].append(seqs)  # type: ignore
-        for name, series in obs.items():
-            root[name].append(series.to_numpy())  # type: ignore  # type: ignore
+        for series in obs:
+            root[series.name].append(series.to_numpy())  # type: ignore
 
     def _write_first_fixed_length(
         self,
-        batch: pd.DataFrame,
+        batch: pl.DataFrame,
         root: zarr.Group,
         compressor,
         sequence_dim: str,
         length_dim: str,
         overwrite: bool,
     ):
-        seqs = batch[self.seq_col].to_numpy().astype("S")[..., None].view("S1")
-        obs = batch.drop(columns=self.seq_col)
+        seqs = (
+            batch[self.seq_col]
+            .cast(pl.Binary)
+            .to_numpy()
+            .astype("S")[..., None]
+            .view("S1")
+        )
+        obs = batch.drop(self.seq_col)
         arr = root.array(
             self.name,
             data=seqs,
@@ -141,14 +149,20 @@ class Table(FlatReader):
             compressor=compressor,
             overwrite=overwrite,
         )
-        first_cols = obs.columns.to_list()
+        first_cols = obs.columns
         return first_cols
 
     def _write_fixed_length(
-        self, batch: pd.DataFrame, root: zarr.Group, first_cols: List, table: Path
+        self, batch: pl.DataFrame, root: zarr.Group, first_cols: List, table: Path
     ):
-        seqs = batch[self.seq_col].to_numpy().astype("S")[..., None].view("S1")
-        obs = batch.drop(columns=self.seq_col)
+        seqs = (
+            batch[self.seq_col]
+            .cast(pl.Binary)
+            .to_numpy()
+            .astype("S")[..., None]
+            .view("S1")
+        )
+        obs = batch.drop(self.seq_col)
         if (
             np.isin(obs.columns, first_cols, invert=True).any()
             or np.isin(first_cols, obs.columns, invert=True).any()
@@ -162,8 +176,8 @@ class Table(FlatReader):
                 ).strip()
             )
         root[self.name].append(seqs)  # type: ignore
-        for name, series in obs.items():
-            root[name].append(series.to_numpy())  # type: ignore  # type: ignore
+        for series in obs:
+            root[series.name].append(series.to_numpy())  # type: ignore
 
     def _write(
         self,
@@ -193,17 +207,22 @@ class Table(FlatReader):
         pbar = tqdm()
         first_batch = True
         for table in self.tables:
-            with self._get_reader(table) as reader:
-                for batch in reader:
-                    batch = cast(pd.DataFrame, batch)
-                    if first_batch:
-                        first_cols = write_first(
-                            batch=batch,
-                            root=root,
-                            compressor=compressor,
-                            overwrite=overwrite,
-                        )
-                        first_batch = False
-                    else:
-                        write_batch(batch, root, first_cols, table)  # type: ignore
-                    pbar.update(len(batch))
+            reader = self._get_reader(table)
+            while batch := reader.next_batches(1):
+                batch = batch[0]
+                if first_batch:
+                    first_cols = write_first(
+                        batch=batch,
+                        root=root,
+                        compressor=compressor,
+                        overwrite=overwrite,
+                    )
+                    first_batch = False
+                else:
+                    write_batch(
+                        batch,
+                        root,
+                        first_cols,  # type: ignore guaranteed to be set during first batch
+                        table,
+                    )
+                pbar.update(len(batch))
