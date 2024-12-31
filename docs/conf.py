@@ -24,9 +24,12 @@ extensions = [
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
+    "sphinxcontrib.bibtex",
     "myst_parser",
     "nbsphinx",
 ]
+
+bibtex_bibfiles = ['references.bib']
 
 napoleon_use_param = True
 napoleon_type_aliases = {

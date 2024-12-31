@@ -27,13 +27,13 @@ Although my focus will largely follow my research projects and the feedback I re
 
 - v0.1.0: ✔️ Initial API for reading BAM, FASTA, BigWig and Tabular data and building loading PyTorch dataloaders
 - v0.2.0: (WIP) Bug fixes, improved documentation, tutorials, and examples
-- v0.3.0: Improved out of core functionality
- - v0.0.4 — Interoperability with AnnData and SnapATAC2
+- v0.3.0: Improved out of core functionality, robust BED classification datasets
+- v0.0.4 — Interoperability with AnnData and SnapATAC2
 
 ## Usage
 
-### Loading data from tabular files
-The simplest way to store genomic sequence data is in a flat "tabular" file. Though this can easily be accomplished using something like `pandas.read_csv`, the SeqData interface keeps the resulting on-disk and in-memory objects standardized with the rest of the SeqData and larger ML4GLand API.
+### Loading data from "flat" files
+The simplest way to store genomic sequence data is in a table or in a "flat" fasta file. Though this can easily be accomplished using something like `pandas.read_csv`, the SeqData interface keeps the resulting on-disk and in-memory objects standardized with the rest of the SeqData and larger ML4GLand API.
 
 ```python
 from seqdata import read_table
@@ -50,6 +50,24 @@ sdata = sd.read_table(
 
 Will generate a `sdata.zarr` file containing the sequences in the `seq_col` column of `sequences.tsv`. The resulting `sdata` object can then be used for downstream analysis.
 
+### Loading sequences from genomic coordinates
+
+### Loading data from BAM files
+Reading from bam files allows one to choose custom counting strategies (often necessary with ATAC-seq data). 
+
+```python
+from seqdata import read_bam
+sdata = sd.read_bam(
+    name="seq",  # name of resulting xarray variable containing sequences
+    out="sdata.zarr",  # output file
+    bams=["data.bam"],  # list of BAM files
+    seq_col="seq_col",  # column containing sequences
+    fixed_length=False,  # whether all sequences are the same length
+    batch_size=1000,  # number of sequences to load at once
+    overwrite=True,  # overwrite the output file if it exists
+)
+```
+
 ### Loading data from BigWig files
 [BigWig files](https://genome.ucsc.edu/goldenpath/help/bigWig.html) are a common way to store track-based data and the workhorse of modern genomic sequence based ML. ...
 
@@ -59,22 +77,6 @@ sdata = sd.read_bigwig(
     name="seq",  # name of resulting xarray variable containing sequences
     out="sdata.zarr",  # output file
     bigwigs=["data.bw"],  # list of BigWig files
-    seq_col="seq_col",  # column containing sequences
-    fixed_length=False,  # whether all sequences are the same length
-    batch_size=1000,  # number of sequences to load at once
-    overwrite=True,  # overwrite the output file if it exists
-)
-```
-
-### Loading data from BAM files
-We less commonly want to load sequence data from BAM files, but it is still a useful feature. Reading from bam files allows one to choose custom counting strategies (often necessary with ATAC-seq data). 
-
-```python
-from seqdata import read_bam
-sdata = sd.read_bam(
-    name="seq",  # name of resulting xarray variable containing sequences
-    out="sdata.zarr",  # output file
-    bams=["data.bam"],  # list of BAM files
     seq_col="seq_col",  # column containing sequences
     fixed_length=False,  # whether all sequences are the same length
     batch_size=1000,  # number of sequences to load at once

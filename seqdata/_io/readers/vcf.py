@@ -58,6 +58,38 @@ class VCF(RegionReader):
         sample_dim: Optional[str] = None,
         haplotype_dim: Optional[str] = None,
     ) -> None:
+        """Warning: This reader is experimental and may change in the future.
+        For a more comprehensive VCF reader, see https://github.com/mcvickerlab/GenVarLoader.
+        
+        Reader for variant call format (VCF) data.
+
+        Parameters
+        ----------
+        name : str
+            Name of the data.
+        vcf : str, Path
+            Path to the VCF file.
+        fasta : str, Path
+            Path to the FASTA file.
+        batch_size : int
+            Number of sequences to read at a time.
+        samples : List[str], optional
+            List of sample names to read from the VCF.
+        n_threads : int, optional
+            Number of threads to use when reading the VCF.
+        samples_per_chunk : int, optional
+            Number of samples to read at a time.
+        alphabet : str, NucleotideAlphabet, optional
+            Alphabet to use for the sequences.
+        sample_dim : str, optional
+            Name of the sample dimension.
+        haplotype_dim : str, optional
+            Name of the haplotype dimension.
+            
+        Returns
+        -------
+        None
+        """
         self.name = name
         self.vcf = Path(vcf)
         self.fasta = Path(fasta)

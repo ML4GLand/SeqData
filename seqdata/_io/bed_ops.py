@@ -42,7 +42,8 @@ def add_bed_to_sdata(
     col_prefix: Optional[str] = None,
     sequence_dim: Optional[str] = None,
 ):
-    """Add a BED-like DataFrame to a Dataset.
+    """Warning: This function is experimental and may change in the future.
+    Add a BED-like DataFrame to a Dataset.
 
     Parameters
     ----------
@@ -68,7 +69,9 @@ def label_overlapping_regions(
     label_dim: Optional[str] = None,
     fraction_overlap: Optional[float] = None,
 ) -> xr.DataArray:
-    """Label regions for binary or multitask classification based on whether they
+    """Warning: This function is experimental and may change in the future.
+    
+    Label regions for binary or multitask classification based on whether they
     overlap with another set of regions.
 
     Parameters

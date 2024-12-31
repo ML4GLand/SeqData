@@ -440,7 +440,8 @@ def merge_obs(
     right_on: Optional[str] = None,
     how: Literal["inner", "left", "right", "outer", "exact"] = "inner",
 ):
-    """Merge observations into a SeqData object along sequence axis.
+    """Warning: This function is experimental and may change in the future.
+    Merge observations into a SeqData object along sequence axis.
 
     Parameters
     ----------

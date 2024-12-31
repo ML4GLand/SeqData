@@ -5,10 +5,23 @@
 
 installation
 usage-principles
-tutorials/1_Reading_Tables
 api
 release-notes
 contributing
+references
+```
+
+```{toctree}
+:hidden: true
+:caption: Tutorials
+:maxdepth: 2
+
+tutorials/1_Reading_Flat_Files
+tutorials/2_Reading_Region_Files
+tutorials/3_Reading_Tracks
+tutorials/4_Zarr_And_XArray
+tutorials/5_PyTorch_Dataloading
+tutorials/6_Complex_Transforms
 ```
 
 

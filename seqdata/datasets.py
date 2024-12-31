@@ -19,6 +19,8 @@ def datasets():
             env="SEQDATA_DATA_DIR",  # The user can overwrite the storage path by setting this environment variable.
             registry={
 
+                # K562-HepG2-SKNSH MPRA
+
                 # K562 ATAC-seq
                 "K562_ATAC-seq.zarr.tar.gz": "sha256:da601746f933a623fc0465c172f0338425690d480ae4aa7c6d645f02d32a7504",
                 "signal.bw": "sha256:df4b2af6ad7612207dcb4f6acce41e8f731b08d2d84c00263f280325c9be8f53",
@@ -28,16 +30,19 @@ def datasets():
                 "plus.bw": "sha256:005ba907136c477754c287113b3479a68121c47368455fef9f19f593e2623462",
                 "minus.bw": "sha256:2ff74b44bea80b1c854a265a1f759a3e1aa7baec10ba20139e39d78d7ea5e1ed",
 
+                # BICCN mouse cortex snATAC-seq
+
             },
             urls={
                 
+                # K562 ATAC-seq
                 "K562_ATAC-seq.zarr": "https://zenodo.org/records/11415225/files/K562_ATAC-seq.zarr",
                 "signal.bw": "https://zenodo.org/records/11415225/files/signal.bw",
                 
+                # K562 CTCF ChIP-seq
                 "K562_CTCF-ChIP-seq.zarr": "https://zenodo.org/records/11415225/files/K562_CTCF-ChIP-seq.zarr",
                 "plus.bw": "https://zenodo.org/records/11415225/files/plus.bw",
                 "minus.bw": "https://zenodo.org/records/11415225/files/minus.bw",
-
                 
             },
         )
