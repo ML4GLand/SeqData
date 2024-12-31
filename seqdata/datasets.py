@@ -18,6 +18,7 @@ def datasets():
             base_url="https://zenodo.org/records/11415225/files/",
             env="SEQDATA_DATA_DIR",  # The user can overwrite the storage path by setting this environment variable.
             registry={
+
                 # K562 ATAC-seq
                 "K562_ATAC-seq.zarr.tar.gz": "sha256:da601746f933a623fc0465c172f0338425690d480ae4aa7c6d645f02d32a7504",
                 "signal.bw": "sha256:df4b2af6ad7612207dcb4f6acce41e8f731b08d2d84c00263f280325c9be8f53",
@@ -29,11 +30,15 @@ def datasets():
 
             },
             urls={
+                
                 "K562_ATAC-seq.zarr": "https://zenodo.org/records/11415225/files/K562_ATAC-seq.zarr",
                 "signal.bw": "https://zenodo.org/records/11415225/files/signal.bw",
+                
                 "K562_CTCF-ChIP-seq.zarr": "https://zenodo.org/records/11415225/files/K562_CTCF-ChIP-seq.zarr",
                 "plus.bw": "https://zenodo.org/records/11415225/files/plus.bw",
                 "minus.bw": "https://zenodo.org/records/11415225/files/minus.bw",
+
+                
             },
         )
     return _datasets
@@ -50,6 +55,7 @@ def K562_ATAC_seq(type: Literal["seqdata", "bigwig"]="seqdata") -> Path:
     elif type == "bigwig":
         return Path(datasets().fetch("signal.bw"))
     
+
 def K562_CTCF_ChIP_seq(type: Literal["seqdata", "bigwig"]="seqdata") -> Path:
     if type == "seqdata":
         path = Path(datasets().fetch("K562_CTCF-ChIP-seq.zarr.tar.gz"))
