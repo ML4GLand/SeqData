@@ -3,7 +3,6 @@ from pathlib import Path
 from typing import List, Literal, Optional, Union, cast
 
 import pandera.polars as pa
-import pandera.typing as pat
 import polars as pl
 import xarray as xr
 import zarr
@@ -11,6 +10,21 @@ from pybedtools import BedTool
 
 from seqdata._io.utils import _df_to_xr_zarr
 from seqdata.types import PathType
+
+BED_COLS = [
+    "chrom",
+    "chromStart",
+    "chromEnd",
+    "name",
+    "score",
+    "strand",
+    "thickStart",
+    "thickEnd",
+    "itemRgb",
+    "blockCount",
+    "blockSizes",
+    "blockStarts",
+]
 
 
 def _set_uniform_length_around_center(bed: pl.DataFrame, length: int) -> pl.DataFrame:
@@ -187,22 +201,25 @@ def read_bedlike(path: PathType) -> pl.DataFrame:
         )
 
 
-class BEDSchema(pa.DataFrameModel):
-    chrom: pat.Series[str]
-    chromStart: pat.Series[int]
-    chromEnd: pat.Series[int]
-    name: Optional[pat.Series[str]] = pa.Field(nullable=True)
-    score: Optional[pat.Series[float]] = pa.Field(nullable=True)
-    strand: Optional[pat.Series[str]] = pa.Field(isin=["+", "-", "."], nullable=True)
-    thickStart: Optional[pat.Series[int]] = pa.Field(nullable=True)
-    thickEnd: Optional[pat.Series[int]] = pa.Field(nullable=True)
-    itemRgb: Optional[pat.Series[str]] = pa.Field(nullable=True)
-    blockCount: Optional[pat.Series[pl.UInt64]] = pa.Field(nullable=True)
-    blockSizes: Optional[pat.Series[str]] = pa.Field(nullable=True)
-    blockStarts: Optional[pat.Series[str]] = pa.Field(nullable=True)
-
-    class Config:  # type: ignore does not need to inherit from BaseConfig
-        coerce = True
+BEDSchema = pa.DataFrameSchema(
+    {
+        "chrom": pa.Column(str),
+        "chromStart": pa.Column(int),
+        "chromEnd": pa.Column(int),
+        "name": pa.Column(str, nullable=True, required=False),
+        "score": pa.Column(float, nullable=True, required=False),
+        "strand": pa.Column(
+            str, nullable=True, checks=pa.Check.isin(["+", "-", "."]), required=False
+        ),
+        "thickStart": pa.Column(int, nullable=True, required=False),
+        "thickEnd": pa.Column(int, nullable=True, required=False),
+        "itemRgb": pa.Column(str, nullable=True, required=False),
+        "blockCount": pa.Column(pl.UInt64, nullable=True, required=False),
+        "blockSizes": pa.Column(str, nullable=True, required=False),
+        "blockStarts": pa.Column(str, nullable=True, required=False),
+    },
+    coerce=True,
+)
 
 
 def _read_bed(bed_path: PathType):
@@ -211,47 +228,36 @@ def _read_bed(bed_path: PathType):
         while (line := f.readline()).startswith(("track", "browser")):
             skip_rows += 1
     n_cols = line.count("\t") + 1
-    bed_cols = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "name",
-        "score",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "itemRgb",
-        "blockCount",
-        "blockSizes",
-        "blockStarts",
-    ]
     bed = pl.read_csv(
         bed_path,
         separator="\t",
         has_header=False,
         skip_rows=skip_rows,
-        new_columns=bed_cols[:n_cols],
+        new_columns=BED_COLS[:n_cols],
         schema_overrides={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
-    ).pipe(BEDSchema.validate)  # type: ignore accepts both LazyFrame and DataFrame
+    ).pipe(BEDSchema.validate)
     bed = cast(pl.DataFrame, bed)
     return bed
 
 
-class NarrowPeakSchema(pa.DataFrameModel):
-    chrom: pat.Series[str]
-    chromStart: pat.Series[int]
-    chromEnd: pat.Series[int]
-    name: pat.Series[str] = pa.Field(nullable=True)
-    score: pat.Series[float] = pa.Field(nullable=True)
-    strand: pat.Series[str] = pa.Field(isin=["+", "-", "."], nullable=True)
-    signalValue: pat.Series[float] = pa.Field(nullable=True)
-    pValue: pat.Series[float] = pa.Field(nullable=True)
-    qValue: pat.Series[float] = pa.Field(nullable=True)
-    peak: pat.Series[int] = pa.Field(nullable=True)
-
-    class Config:  # type: ignore does not need to inherit from BaseConfig
-        coerce = True
+NarrowPeakSchema = pa.DataFrameSchema(
+    {
+        "chrom": pa.Column(str),
+        "chromStart": pa.Column(int),
+        "chromEnd": pa.Column(int),
+        "name": pa.Column(str, nullable=True, required=False),
+        "score": pa.Column(float, nullable=True, required=False),
+        "strand": pa.Column(
+            str, nullable=True, checks=pa.Check.isin(["+", "-", "."]), required=False
+        ),
+        "signalValue": pa.Column(float, nullable=True, required=False),
+        "pValue": pa.Column(float, nullable=True, required=False),
+        "qValue": pa.Column(float, nullable=True, required=False),
+        "peak": pa.Column(int, nullable=True, required=False),
+    },
+    coerce=True,
+)
 
 
 def _read_narrowpeak(narrowpeak_path: PathType) -> pl.DataFrame:
@@ -278,24 +284,27 @@ def _read_narrowpeak(narrowpeak_path: PathType) -> pl.DataFrame:
         ],
         schema_overrides={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
-    ).pipe(NarrowPeakSchema.validate)  # type: ignore accepts both LazyFrame and DataFrame
+    ).pipe(NarrowPeakSchema.validate)
     narrowpeaks = cast(pl.DataFrame, narrowpeaks)
     return narrowpeaks
 
 
-class BroadPeakSchema(pa.DataFrameModel):
-    chrom: pat.Series[str]
-    chromStart: pat.Series[int]
-    chromEnd: pat.Series[int]
-    name: pat.Series[str] = pa.Field(nullable=True)
-    score: pat.Series[float] = pa.Field(nullable=True)
-    strand: pat.Series[str] = pa.Field(isin=["+", "-", "."], nullable=True)
-    signalValue: pat.Series[float] = pa.Field(nullable=True)
-    pValue: pat.Series[float] = pa.Field(nullable=True)
-    qValue: pat.Series[float] = pa.Field(nullable=True)
-
-    class Config:  # type: ignore does not need to inherit from BaseConfig
-        coerce = True
+BroadPeakSchema = pa.DataFrameSchema(
+    {
+        "chrom": pa.Column(str),
+        "chromStart": pa.Column(int),
+        "chromEnd": pa.Column(int),
+        "name": pa.Column(str, nullable=True, required=False),
+        "score": pa.Column(float, nullable=True, required=False),
+        "strand": pa.Column(
+            str, nullable=True, checks=pa.Check.isin(["+", "-", "."]), required=False
+        ),
+        "signalValue": pa.Column(float, nullable=True, required=False),
+        "pValue": pa.Column(float, nullable=True, required=False),
+        "qValue": pa.Column(float, nullable=True, required=False),
+    },
+    coerce=True,
+)
 
 
 def _read_broadpeak(broadpeak_path: PathType):
@@ -321,6 +330,6 @@ def _read_broadpeak(broadpeak_path: PathType):
         ],
         schema_overrides={"chrom": pl.Utf8, "name": pl.Utf8, "strand": pl.Utf8},
         null_values=".",
-    ).pipe(BroadPeakSchema.validate)  # type: ignore accepts both LazyFrame and DataFrame
+    ).pipe(BroadPeakSchema.validate)
     broadpeaks = cast(pl.DataFrame, broadpeaks)
     return broadpeaks

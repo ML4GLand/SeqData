@@ -11,7 +11,7 @@ pyranges = "^0.0.120"
 xarray = ">=2023.10.0"
 zarr = "^2.14.2"
 dask = "^2023.3.2"
-pandera = { version = "^0.21.0", extras = ["polars"] }
+pandera = { version = "^0.22.0", extras = ["polars"] }
 cyvcf2 = "^0.30.18"
 pyBigWig = "^0.3.22"
 polars = "^1.0.0"
