@@ -357,7 +357,7 @@ def from_region_files(
                     _bed.item(0, "chromEnd") - _bed.item(0, "chromStart"),
                 )
             fixed_length += 2 * max_jitter
-            _set_uniform_length_around_center(_bed, fixed_length)
+            _bed = _set_uniform_length_around_center(_bed, fixed_length)
         _bed_to_zarr(
             _bed,
             root,
