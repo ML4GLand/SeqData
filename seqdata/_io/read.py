@@ -9,6 +9,7 @@ from seqdata.xarray.seqdata import from_flat_files, from_region_files
 
 if TYPE_CHECKING:
     import pandas as pd
+    import polars as pl
     import xarray as xr
 
 
@@ -20,7 +21,7 @@ def read_table(
     batch_size: int,
     fixed_length: bool,
     overwrite=False,
-    **kwargs
+    **kwargs,
 ) -> "xr.Dataset":
     """Reads sequences and metadata from tabular files (e.g. CSV, TSV, etc.) into xarray.
 
@@ -46,7 +47,7 @@ def read_table(
         Whether to overwrite the output Zarr store if it already exists.
     **kwargs
         Additional keyword arguments to pass to the polars `read_csv` function.
-    
+
     Returns
     -------
     xr.Dataset
@@ -73,7 +74,7 @@ def read_flat_fasta(
     overwrite=False,
 ) -> "xr.Dataset":
     """Reads sequences from a "flat" FASTA file into xarray.
-    
+
     We differentiate between "flat" and "genome" FASTA files. A flat FASTA file is one
     where each contig in the FASTA file is a sequence in our dataset. A genome FASTA file
     is one where we may pull out multiple subsequences from a given contig.
@@ -115,7 +116,7 @@ def read_genome_fasta(
     name: str,
     out: PathType,
     fasta: PathType,
-    bed: Union[PathType, "pd.DataFrame"],
+    bed: Union[PathType, "pd.DataFrame", "pl.DataFrame"],
     batch_size: int,
     fixed_length: Union[int, bool],
     n_threads=1,
@@ -139,7 +140,7 @@ def read_genome_fasta(
     fasta : PathType
         Path to the input FASTA file.
     bed : Union[PathType, pd.DataFrame]
-        Path to the input BED file or a pandas DataFrame with the BED data. Used to 
+        Path to the input BED file or a pandas DataFrame with the BED data. Used to
         define the regions of the genome to pull out. TODO: what does the BED
         have to have?
     batch_size : int
@@ -153,7 +154,7 @@ def read_genome_fasta(
         Alphabet to use for reading sequences
     max_jitter : int
         Maximum amount of jitter anticipated. This will read in max_jitter/2 extra sequence
-        on either side of the region defined by the BED file. This is useful for training 
+        on either side of the region defined by the BED file. This is useful for training
         models on coverage data
     overwrite : bool
         Whether to overwrite the output Zarr store if it already exists.
@@ -182,7 +183,7 @@ def read_bam(
     fasta: PathType,
     bams: ListPathType,
     samples: List[str],
-    bed: Union[PathType, "pd.DataFrame"],
+    bed: Union[PathType, "pd.DataFrame", "pl.DataFrame"],
     batch_size: int,
     fixed_length: Union[int, bool],
     n_jobs=1,
@@ -272,13 +273,12 @@ def read_bigwig(
     fasta: PathType,
     bigwigs: ListPathType,
     samples: List[str],
-    bed: Union[PathType, "pd.DataFrame"],
+    bed: Union[PathType, "pd.DataFrame", "pl.DataFrame"],
     batch_size: int,
     fixed_length: Union[int, bool],
     n_jobs=1,
     threads_per_job=1,
     alphabet: Optional[Union[str, sp.NucleotideAlphabet]] = None,
-    dtype: Union[str, Type[np.number]] = np.uint16,
     max_jitter=0,
     overwrite=False,
 ) -> "xr.Dataset":
@@ -342,7 +342,6 @@ def read_bigwig(
             batch_size=batch_size,
             n_jobs=n_jobs,
             threads_per_job=threads_per_job,
-            dtype=dtype,
         ),
         path=out,
         fixed_length=fixed_length,
@@ -359,7 +358,7 @@ def read_vcf(
     vcf: PathType,
     fasta: PathType,
     samples: List[str],
-    bed: Union[PathType, "pd.DataFrame"],
+    bed: Union[PathType, "pd.DataFrame", "pl.DataFrame"],
     batch_size: int,
     fixed_length: Union[int, bool],
     n_threads=1,
