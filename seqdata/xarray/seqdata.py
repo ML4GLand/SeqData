@@ -15,6 +15,7 @@ from typing import (
 )
 
 import numpy as np
+import pandas as pd
 import polars as pl
 import xarray as xr
 import zarr
@@ -282,7 +283,7 @@ def from_region_files(
     *readers: RegionReader,
     path: PathType,
     fixed_length: Union[int, bool],
-    bed: Union[PathType, pl.DataFrame],
+    bed: Union[PathType, pl.DataFrame, pd.DataFrame],
     max_jitter=0,
     sequence_dim: Optional[str] = None,
     length_dim: Optional[str] = None,
@@ -338,6 +339,8 @@ def from_region_files(
 
     if isinstance(bed, (str, Path)):
         _bed = read_bedlike(bed)
+    elif isinstance(bed, pd.DataFrame):
+        _bed = pl.from_pandas(bed)
     else:
         _bed = bed
 
