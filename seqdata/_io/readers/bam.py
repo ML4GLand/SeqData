@@ -1,6 +1,16 @@
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Generic, List, Literal, Optional, Type, Union, cast
+from typing import (
+    Any,
+    Dict,
+    Generic,
+    List,
+    Literal,
+    Optional,
+    Type,
+    Union,
+    cast,
+)
 
 import joblib
 import numpy as np
@@ -17,6 +27,7 @@ from numcodecs import (
 )
 from numpy.typing import NDArray
 from tqdm import tqdm
+from typing_extensions import assert_never
 
 from seqdata._io.utils import _get_row_batcher
 from seqdata.types import DTYPE, PathType, RegionReader
@@ -30,6 +41,7 @@ from seqdata.types import DTYPE, PathType, RegionReader
 
 
 class CountMethod(str, Enum):
+    READS = "reads"
     FRAGMENTS = "fragments"
     ENDS = "ends"
 
@@ -41,15 +53,17 @@ class BAM(RegionReader, Generic[DTYPE]):
         bams: Union[str, Path, List[str], List[Path]],
         samples: Union[str, List[str]],
         batch_size: int,
+        count_method: Union[CountMethod, Literal["reads", "fragments", "ends"]],
         n_jobs=1,
         threads_per_job=1,
         dtype: Union[str, Type[np.number]] = np.uint16,
         sample_dim: Optional[str] = None,
-        count_method: Union[CountMethod, Literal["fragments", "ends"]] = "fragments",
-        left_shift: Optional[int] = None,
-        right_shift: Optional[int] = None,
+        pos_shift: Optional[int] = None,
+        neg_shift: Optional[int] = None,
+        min_mapping_quality: Optional[int] = None,
     ) -> None:
-        """Reader for BAM files.
+        """Reader for next-generation sequencing paired-end BAM files. This reader will only count
+        reads that are properly paired and not secondary alignments.
 
         Parameters
         ----------
@@ -73,12 +87,18 @@ class BAM(RegionReader, Generic[DTYPE]):
             Data type to write the coverage as, by default np.uint16.
         sample_dim : Optional[str], optional
             Name of the sample dimension, by default None
-        count_method : Union[CountMethod, Literal["fragments", "ends"]], optional
-            Count method, by default "fragments"
-        left_shift : Optional[int], optional
-            Shift the left end of the fragment by this amount, by default None
-        right_shift : Optional[int], optional
-            Shift the right end of the fragment by this amount, by default None
+        count_method : Union[CountMethod, Literal["reads", "fragments", "ends"]]
+            Count method:
+            - "reads" counts the base pairs spanning the aligned sequences of reads.
+            - "fragments" counts the base pairs spanning from the start of R1 to the end of R2.
+            - "ends" counts only the single base positions for the start of R1 and the end of R2.
+
+        pos_shift : Optional[int], optional
+            Shift the forward read by this amount, by default None
+        neg_shift : Optional[int], optional
+            Shift the negative read by this amount, by default None
+        min_mapping_quality : Optional[int], optional
+            Minimum mapping quality for reads to be counted, by default None
         """
         if isinstance(bams, str):
             bams = [bams]
@@ -97,8 +117,9 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
         self.count_method = CountMethod(count_method)
-        self.left_shift = left_shift
-        self.right_shift = right_shift
+        self.pos_shift = pos_shift
+        self.neg_shift = neg_shift
+        self.min_mapping_quality = min_mapping_quality
 
     def _write(
         self,
@@ -351,8 +372,15 @@ class BAM(RegionReader, Generic[DTYPE]):
 
         read_cache: Dict[str, pysam.AlignedSegment] = {}
 
-        for i, read in enumerate(f.fetch(contig, max(0, start), end)):
-            if not read.is_proper_pair or read.is_secondary:
+        for read in f.fetch(contig, max(0, start), end):
+            if (
+                not read.is_proper_pair
+                or read.is_secondary
+                or (
+                    self.min_mapping_quality is not None
+                    and read.mapping_quality < self.min_mapping_quality
+                )
+            ):
                 continue
 
             if read.query_name not in read_cache:
@@ -370,15 +398,14 @@ class BAM(RegionReader, Generic[DTYPE]):
             rel_start = forward_read.reference_start - start
             # 0-based, 1 past aligned
             # e.g. start:end == 0:2 == [0, 1] so position of end == 1
-            rel_end = cast(int, reverse_read.reference_end) - start
+            rel_end = reverse_read.reference_end - start  # type: ignore | reference_end is defined for proper pairs
 
             # Shift read if accounting for offset
-            if self.left_shift:
-                rel_start = max(0, rel_start + self.left_shift)
-            if self.right_shift:
-                rel_end = min(length, rel_end + self.right_shift)
+            if self.pos_shift:
+                rel_start = max(0, rel_start + self.pos_shift)
+            if self.neg_shift:
+                rel_end = min(length, rel_end + self.neg_shift)
 
-            # Check count method
             if self.count_method is CountMethod.ENDS:
                 # Add cut sites to out_array
                 if rel_start >= 0 and rel_start < length:
@@ -388,30 +415,43 @@ class BAM(RegionReader, Generic[DTYPE]):
             elif self.count_method is CountMethod.FRAGMENTS:
                 # Add range to out array
                 out_array[rel_start:rel_end] += 1
+            elif self.count_method is CountMethod.READS:
+                out_array[rel_start : forward_read.reference_end - start] += 1  # type: ignore | reference_end is defined for proper pairs
+                out_array[reverse_read.reference_start - start : rel_end] += 1
+            else:
+                assert_never(self.count_method)
 
-        # if any reads are still in the cache, then their mate isn't in the region
+        # if any reads are still in the cache, then their mate isn't in the region or didn't meet quality threshold
         for read in read_cache.values():
             # for reverse reads, their mate is in the 5' <- direction
             if read.is_reverse:
-                rel_end = cast(int, read.reference_end) - start
-                if self.right_shift:
-                    rel_end = min(length, rel_end + self.right_shift)
+                rel_end = read.reference_end - start  # type: ignore | reference_end is defined for proper pairs
+                if self.neg_shift:
+                    rel_end = min(length, rel_end + self.neg_shift)
                     if rel_end < 0 or rel_end > length:
                         continue
                 if self.count_method is CountMethod.ENDS:
                     out_array[rel_end - 1] += 1
                 elif self.count_method is CountMethod.FRAGMENTS:
                     out_array[:rel_end] += 1
+                elif self.count_method is CountMethod.READS:
+                    out_array[read.reference_start - start : rel_end] += 1
+                else:
+                    assert_never(self.count_method)
             # for forward reads, their mate is in the 3' -> direction
             else:
                 rel_start = read.reference_start - start
-                if self.left_shift:
-                    rel_start = max(0, rel_start + self.left_shift)
+                if self.pos_shift:
+                    rel_start = max(0, rel_start + self.pos_shift)
                     if rel_start < 0 or rel_start >= length:
                         continue
                 if self.count_method is CountMethod.ENDS:
                     out_array[rel_start] += 1
                 elif self.count_method is CountMethod.FRAGMENTS:
                     out_array[rel_start:] += 1
+                elif self.count_method is CountMethod.READS:
+                    out_array[rel_start : read.reference_end - start] += 1  # type: ignore | reference_end is defined for proper pairs
+                else:
+                    assert_never(self.count_method)
 
         return out_array
