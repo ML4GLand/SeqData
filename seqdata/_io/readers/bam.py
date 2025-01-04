@@ -1,3 +1,4 @@
+import os
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -54,8 +55,8 @@ class BAM(RegionReader, Generic[DTYPE]):
         samples: Union[str, List[str]],
         batch_size: int,
         count_method: Union[CountMethod, Literal["reads", "fragments", "ends"]],
-        n_jobs=1,
-        threads_per_job=1,
+        n_jobs=-1,
+        threads_per_job=-1,
         dtype: Union[str, Type[np.number]] = np.uint16,
         sample_dim: Optional[str] = None,
         pos_shift: Optional[int] = None,
@@ -77,12 +78,13 @@ class BAM(RegionReader, Generic[DTYPE]):
             Number of sequences to write at a time. Note this also sets the chunksize
             along the sequence dimension.
         n_jobs : int, optional
-            Number of BAMs to process in parallel, by default 1, which disables
-            multiprocessing. Don't set this higher than the number of BAMs or number of
-            cores available.
+            Number of BAMs to process in parallel, by default -1. If -1, use the number
+            of available cores or the number of BAMs, whichever is smaller. If 0 or 1, process
+            BAMs sequentially. Not recommended to set this higher than the number of BAMs.
         threads_per_job : int, optional
-            Threads to use per job, by default 1. Make sure the number of available
-            cores is >= n_jobs * threads_per_job.
+            Threads to use per job, by default -1. If -1, uses any extra cores available after
+            allocating them to n_jobs. Not recommended to set this higher than the number of cores
+            available divided by n_jobs.
         dtype : Union[str, Type[np.number]], optional
             Data type to write the coverage as, by default np.uint16.
         sample_dim : Optional[str], optional
@@ -112,14 +114,26 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.bams = bams
         self.samples = samples
         self.batch_size = batch_size
-        self.n_jobs = n_jobs
-        self.threads_per_job = threads_per_job
         self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
         self.count_method = CountMethod(count_method)
         self.pos_shift = pos_shift
         self.neg_shift = neg_shift
         self.min_mapping_quality = min_mapping_quality
+
+        n_cpus = len(os.sched_getaffinity(0))
+        if n_jobs == -1:
+            n_jobs = min(n_cpus, len(self.bams))
+        elif n_jobs == 0:
+            n_jobs = 1
+
+        if threads_per_job == -1:
+            threads_per_job = 1
+            if n_cpus > n_jobs:
+                threads_per_job = n_cpus // n_jobs
+
+        self.n_jobs = n_jobs
+        self.threads_per_job = threads_per_job
 
     def _write(
         self,
@@ -202,7 +216,7 @@ class BAM(RegionReader, Generic[DTYPE]):
             )
             for bam, sample_idx in zip(self.bams, sample_idxs)
         ]
-        with joblib.parallel_backend(
+        with joblib.parallel_config(
             "loky", n_jobs=self.n_jobs, inner_max_num_threads=self.threads_per_job
         ):
             joblib.Parallel()(tasks)
