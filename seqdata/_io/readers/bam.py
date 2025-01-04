@@ -51,7 +51,7 @@ class BAM(RegionReader, Generic[DTYPE]):
     def __init__(
         self,
         name: str,
-        bams: Union[str, Path, List[str], List[Path]],
+        bams: Union[PathType, List[PathType]],
         samples: Union[str, List[str]],
         batch_size: int,
         count_method: Union[CountMethod, Literal["reads", "fragments", "ends"]],
@@ -102,9 +102,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         min_mapping_quality : Optional[int], optional
             Minimum mapping quality for reads to be counted, by default None
         """
-        if isinstance(bams, str):
-            bams = [bams]
-        elif isinstance(bams, Path):
+        if isinstance(bams, str) or isinstance(bams, Path):
             bams = [bams]
         if isinstance(samples, str):
             samples = [samples]
@@ -114,16 +112,16 @@ class BAM(RegionReader, Generic[DTYPE]):
         self.bams = bams
         self.samples = samples
         self.batch_size = batch_size
+        self.count_method = CountMethod(count_method)
         self.dtype = np.dtype(dtype)
         self.sample_dim = f"{name}_sample" if sample_dim is None else sample_dim
-        self.count_method = CountMethod(count_method)
         self.pos_shift = pos_shift
         self.neg_shift = neg_shift
         self.min_mapping_quality = min_mapping_quality
 
         n_cpus = len(os.sched_getaffinity(0))
         if n_jobs == -1:
-            n_jobs = min(n_cpus, len(self.bams))
+            n_jobs = min(n_cpus, len(bams))
         elif n_jobs == 0:
             n_jobs = 1
 
