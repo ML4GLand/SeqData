@@ -1,5 +1,5 @@
 # Installation
-You must have Python version 3.9 or higher installed to use SeqData. SeqData is a Python package, and can be installed using `pip`:
+You must have Python version 3.9 or higher installed to use SeqData. SeqData can be installed using `pip`:
 
 ```bash
 pip install seqdata
@@ -24,12 +24,6 @@ If you plan on building PyTorch dataloaders from SeqData objects, you will need 
 
 ```bash
 pip install seqdata[torch]
-```
-
-Extras for development `[docs]` can be installed using:
-
-```bash
-pip install seqdata[docs]
 ```
 
 ## Troubleshooting

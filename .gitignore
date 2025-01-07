@@ -1,10 +1,4 @@
-# User defined
-eugene_data/
-data/
-notebooks/
-requirements.txt
-external/
-scripts/
+archive/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

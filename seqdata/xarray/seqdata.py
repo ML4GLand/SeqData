@@ -244,12 +244,13 @@ def from_flat_files(
 
     Parameters
     ----------
+    *readers : FlatReader
+        Readers to use to create the SeqData object.
     path : str, Path
         Path to save this SeqData to.
     fixed_length : bool
         `True`: assume the all sequences have the same length and will infer it
         from the first sequence.
-
         `False`: write variable length sequences.
     overwrite : bool, optional
         Whether to overwrite existing arrays of the SeqData at `path`, by default False
@@ -297,6 +298,8 @@ def from_region_files(
 
     Parameters
     ----------
+    *readers : RegionReader
+        Readers to use to create the SeqData object.
     path : str, Path
         Path to save this SeqData to.
     fixed_length : int, bool, optional
@@ -440,7 +443,29 @@ def merge_obs(
     right_on: Optional[str] = None,
     how: Literal["inner", "left", "right", "outer", "exact"] = "inner",
 ):
-    """Merge observations into a SeqData object along sequence axis."""
+    """Warning: This function is experimental and may change in the future.
+    Merge observations into a SeqData object along sequence axis.
+
+    Parameters
+    ----------
+    sdata : xr.Dataset
+        SeqData object.
+    obs : xr.Dataset, pd.DataFrame
+        Observations to merge.
+    on : str, optional
+        Column to merge on, by default None
+    left_on : str, optional
+        Column to merge on from the left dataset, by default None
+    right_on : str, optional
+        Column to merge on from the right dataset, by default None
+    how : {"inner", "left", "right", "outer", "exact"}, optional
+        Type of merge to perform, by default "inner"
+    
+    Returns
+    -------
+    xr.Dataset
+        Merged SeqData object.
+    """
     if on is None and (left_on is None or right_on is None):
         raise ValueError("Must provide either `on` or both `left_on` and `right_on`.")
     if on is not None and (left_on is not None or right_on is not None):

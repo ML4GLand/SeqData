@@ -1,52 +1,81 @@
-import os
-import sys
-import sphinx_rtd_theme
+# Configuration file for the Sphinx documentation builder.
+#
+# For the full list of built-in configuration values, see the documentation:
+# https://www.sphinx-doc.org/en/master/usage/configuration.html
 
-sys.path.insert(0, os.path.abspath(".."))
+import seqdata as sd
 
-# -- General configuration ---------------------------------------------------
+# -- Project information -----------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-needs_sphinx = "2.0"  # Nicer param docs
-suppress_warnings = [
-    "ref.citation",
-    "myst.header",  # https://github.com/executablebooks/MyST-Parser/issues/262
-]
 project = "SeqData"
 copyright = "2023, Adam Klie"
 author = "Adam Klie"
-release = "0.1.0"
+release = sd.__version__
+# short X.Y verison
+version = ".".join(release.split(".")[:2])
 
-# default settings
-templates_path = ["_templates"]
-master_doc = "index"
-default_role = "literal"
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
-pygments_style = "sphinx"
+
+# -- General configuration ---------------------------------------------------
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
 extensions = [
-    "sphinx.ext.autosummary",
+    "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
-    "sphinx_autodoc_typehints",
+    "sphinx.ext.viewcode",
+    "sphinxcontrib.bibtex",
     "myst_parser",
     "nbsphinx",
 ]
 
-autosummary_generate = True
-napoleon_google_docstring = False
-napoleon_numpy_docstring = True
-napoleon_include_init_with_doc = False
-napoleon_use_rtype = True  # having a separate entry generally helps readability
+bibtex_bibfiles = ['references.bib']
+
 napoleon_use_param = True
-napoleon_custom_sections = [("Params", "Parameters")]
-todo_include_todos = False
+napoleon_type_aliases = {
+    "ArrayLike": ":term:`array_like`",
+    "NDArray": ":ref:`NDArray <numpy.typing.NDArray>`",
+}
+napoleon_use_rtype = True
+
+autodoc_typehints = "both"
+autodoc_type_aliases = {"ArrayLike": "ArrayLike"}
+autodoc_default_options = {"private-members": False}
+autodoc_member_order = "bysource"
+
+myst_enable_extensions = ["colon_fence"]
+
+templates_path = ["_templates"]
+exclude_patterns = []
+
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "numba": ("https://numba.readthedocs.io/en/stable/", None),
+    "polars": ("https://docs.pola.rs/py-polars/html", None),
+    "torch": ("https://pytorch.org/docs/stable/", None),
+}
 
 # -- Options for HTML output -------------------------------------------------
-html_theme = "sphinx_rtd_theme"
-html_theme_path = [sphinx_rtd_theme.get_html_theme_path()]
-html_title = "EUGENe"
-html_static_path = ["_static"]
-html_show_sphinx = False
+# https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
 
-# -- Options for extensions -------------------------------------------------------------------------------
-nbsphinx_execute = "never"
+html_theme = "sphinx_book_theme"
+html_static_path = ["_static"]
+html_theme_options = {
+    "home_page_in_toc": True,
+    "repository_url": "https://github.com/adamklie/SeqDat",
+    "use_repository_button": True,
+    "pygments_light_style": "tango",
+    "pygments_dark_style": "material",
+    "show_navbar_depth": 2,  # Ensures dropdown levels are visible
+}
+html_logo = "_static/seqdata_xr.png"
+html_title = f"SeqData v{version}"
+html_sidebars = {
+    "**": [
+        "navbar-logo.html",
+        "icon-links.html",
+        "search-button-field.html",
+        "sbt-sidebar-nav.html",
+    ]
+}

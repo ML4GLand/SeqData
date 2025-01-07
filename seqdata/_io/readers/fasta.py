@@ -34,6 +34,23 @@ class FlatFASTA(FlatReader):
         batch_size: int,
         n_threads: int = 1,
     ) -> None:
+        """Reader for flat FASTA files.
+
+        Parameters
+        ----------
+        name : str
+            Name of the sequence array in resulting SeqData Zarr.
+        fasta : str, Path
+            Path to FASTA file.
+        batch_size : int
+            Number of sequences to read at once.
+        n_threads : int, default 1
+            Number of threads to use for reading the FASTA file.
+
+        Returns
+        -------
+        None
+        """
         self.name = name
         self.fasta = fasta
         self.batch_size = batch_size

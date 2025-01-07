@@ -22,6 +22,25 @@ class Table(FlatReader):
         batch_size: int,
         **kwargs,
     ) -> None:
+        """Reader for tabular data.
+
+        Parameters
+        ----------
+        name : str
+            Name of the data.
+        tables : str, Path, List[str], List[Path]
+            Path to table or list of paths to tables.
+        seq_col : str
+            Name of the column containing the sequences.
+        batch_size : int
+            Number of rows to read at a time.
+        **kwargs
+            Additional keyword arguments to pass to `pd.read_csv`.
+
+        Returns
+        -------
+        None
+        """
         self.name = name
         if not isinstance(tables, list):
             tables = [Path(tables)]
@@ -34,6 +53,8 @@ class Table(FlatReader):
         if ".csv" in table.suffixes:
             sep = ","
         elif ".tsv" in table.suffixes:
+            sep = "\t"
+        elif ".txt" in table.suffixes:
             sep = "\t"
         else:
             sep = None

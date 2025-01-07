@@ -34,6 +34,29 @@ class BigWig(RegionReader):
         threads_per_job=1,
         sample_dim: Optional[str] = None,
     ) -> None:
+        """Reader for BigWig files.
+
+        Parameters
+        ----------
+        name : str
+            Name of sequence variable in resulting Zarr.
+        bigwigs : List[str], List[Path]
+            Paths to BigWig files.
+        samples : List[str]
+            Names of samples corresponding to BigWig files.
+        batch_size : int
+            Number of regions to read at a time.
+        n_jobs : int, default 1
+            Number of jobs to run in parallel.
+        threads_per_job : int, default 1
+            Number of threads per job.
+        sample_dim : str, default None
+            Name of sample dimension.
+
+        Returns
+        -------
+        None
+        """
         self.name = name
         self.bigwigs = list(map(Path, bigwigs))
         self.samples = samples
