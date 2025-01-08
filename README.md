@@ -5,7 +5,7 @@
 
 # SeqData (Annotated sequence data)
 
-[[documentation](https://seqdata.readthedocs.io/en/latest/)][[tutorials]()]
+[[documentation](https://seqdata.readthedocs.io/en/latest/)][[tutorials](https://github.com/ML4GLand/SeqData/tree/docs/docs/tutorials)]
 
 SeqData is a Python package for preparing ML-ready genomic sequence datasets. Some of the key features of SeqData include:
 
