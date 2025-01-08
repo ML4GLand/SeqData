@@ -15,7 +15,7 @@ SeqData is a Python package for preparing ML-ready genomic sequence datasets. So
 - Offers out-of-core dataloading from disk to CPU to GPU
 
 > [!NOTE] 
-> SeqData is under active development. The API has largely been decided on, but may change slightly across versions until the first major release.
+> The API for SeqData has largely been decided on, but may change slightly across versions until the first major release.
 
 ## Installation
 
@@ -27,13 +27,14 @@ Although my focus will largely follow my research projects and the feedback I re
 
 - v0.1.0: ✔️ Initial API for reading BAM, FASTA, BigWig and Tabular data and building loading PyTorch dataloaders
 - v0.2.0: (WIP) Bug fixes, improved documentation, tutorials, and examples
-- v0.3.0: Improved out of core functionality, robust BED classification datasets
-- v0.0.4 — Interoperability with AnnData and SnapATAC2
+- v0.X.0: Improved out of core functionality, robust BED classification datasets
+- v0.X.4 — Interoperability with AnnData and SnapATAC2
 
-## Usage
+## Quickstart
+The below examples illustrate the simplest way to read in data from commonly used file formats. For a more comprehensive guide to using the SeqData API, see the full [documentation](https://seqdata.readthedocs.io/en/latest/).
 
-### Loading data from "flat" files
-The simplest way to store genomic sequence data is in a table or in a "flat" fasta file. Though this can easily be accomplished using something like `pandas.read_csv`, the SeqData interface keeps the resulting on-disk and in-memory objects standardized with the rest of the SeqData and larger ML4GLand API.
+### Loading sequences from "flat" files
+The simplest way to store genomic sequence data is as plain text strings in a table. For reading sequences from one or more csv/tsv files, use the `read_table` function:
 
 ```python
 from seqdata import read_table
@@ -48,12 +49,38 @@ sdata = sd.read_table(
 )
 ```
 
-Will generate a `sdata.zarr` file containing the sequences in the `seq_col` column of `sequences.tsv`. The resulting `sdata` object can then be used for downstream analysis.
+These "fixed" sequences can also be stored in FASTA format. In SeqData, we call this a "flat" fasta file. Use the `read_flat_fasta` function to read sequences from such a file:
+
+```python
+from seqdata import read_flat_fasta
+sdata = sd.read_flat_fasta(
+    name="seq",  # name of resulting xarray variable containing sequences
+    out="sdata.zarr",  # output file
+    fasta="sequences.fa",  # fasta file
+    fixed_length=False,  # whether all sequences are the same length
+    batch_size=1000,  # number of sequences to load at once
+    overwrite=True,  # overwrite the output file if it exists
+)
+```
 
 ### Loading sequences from genomic coordinates
+Sequences are commonly implicity referenced in FASTA files using genomic coordinates in BED-like files rather than fully specified as above. We can use `read_genome_fasta` to load sequences from a genome fasta file using regions in a BED-like file:
 
-### Loading data from BAM files
-Reading from bam files allows one to choose custom counting strategies (often necessary with ATAC-seq data). 
+```python
+from seqdata import read_genome_fasta
+sdata = sd.read_genome_fasta(
+    name="seq",  # name of resulting xarray variable containing sequences
+    out="sdata.zarr",  # output file
+    fasta="genome.fa",  # fasta file
+    bed="regions.bed",  # bed file
+    fixed_length=False,  # whether all sequences are the same length
+    batch_size=1000,  # number of sequences to load at once
+    overwrite=True,  # overwrite the output file if it exists
+)
+```
+
+### Loading read depth from BAM files
+In functional genomics, we often work with aligned sequence reads stored in BAM files. In many applications, it is useful to quantify the pileup of reads at each position to describe a signal of interest (e.g. protein binding, chromatin accessibility, etc.). Used in combination with BED-like files, we can extract both sequences and base-pair resolution read pileup with the `read_bam` function:
 
 ```python
 from seqdata import read_bam
@@ -68,8 +95,10 @@ sdata = sd.read_bam(
 )
 ```
 
-### Loading data from BigWig files
-[BigWig files](https://genome.ucsc.edu/goldenpath/help/bigWig.html) are a common way to store track-based data and the workhorse of modern genomic sequence based ML. ...
+Because BAM files contain read alignments, we can use different strategies for quantifying the pileup at each position. See the TODO for a deeper dive into...TODO
+
+### Loading read depth from BigWig files
+BAM files can be quite large and often carry more information than we need. [BigWig files](https://genome.ucsc.edu/goldenpath/help/bigWig.html) are a common way to store quantitative values at each genomic position (e.g. read depth, methylation fraction, etc.)
 
 ```python
 from seqdata import read_bigwig
@@ -84,22 +113,17 @@ sdata = sd.read_bigwig(
 )
 ```
 
-### Working with Zarr stores and XArray objects
-The SeqData API is built to convert data from common formats to Zarr stores on disk. The Zarr store... When coupled with XArray and Dask, we also have the ability to lazy load data and work with data that is too large to fit in memory. 
+### Building a dataloader
+One of the main goals of SeqData is to allow a seamless flow from files on disk to machine learning ready datasets. This can be achieved after loading data from the above functions by building a PyTorch dataloader with the `get_torch_dataloader` function:
 
 ```python
+from seqdata import get_torch_dataloader
+dl = sd.get_torch_dataloader(
+        sdata,  # SeqData object (e.g. as returned by read_table)
+        sample_dims="_sequence",  # dimension to sample along
+        variables=["seqs"],  # list of variables to include in the dataloader
+        batch_size=2,
+    )
 ```
 
-Admittedly, working with XArray can take some getting used to...
-
-### Building a dataloader
-The main goal of SeqData is to allow a seamless flow
-
-## Contributing
-This section was modified from https://github.com/pachterlab/kallisto.
-
-All contributions, including bug reports, documentation improvements, and enhancement suggestions are welcome. Everyone within the community is expected to abide by our [code of conduct](https://github.com/ML4GLand/EUGENe/blob/main/CODE_OF_CONDUCT.md)
-
-As we work towards a stable v1.0.0 release, and we typically develop on branches. These are merged into `dev` once sufficiently tested. `dev` is the latest, stable, development branch. 
-
-`main` is used only for official releases and is considered to be stable. If you submit a pull request, please make sure to request to merge into `dev` and NOT `main`.
+This generates a PyTorch dataloader that returns batches as Python dictionaries with the specified variables as keys.
