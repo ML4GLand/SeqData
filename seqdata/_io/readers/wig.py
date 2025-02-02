@@ -267,7 +267,7 @@ class BigWig(RegionReader):
         splice: bool,
     ):
         blosc.set_nthreads(n_threads)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         batch = np.empty((batch_size, fixed_length), dtype=self.DTYPE)
 
@@ -297,7 +297,7 @@ class BigWig(RegionReader):
         splice: bool,
     ):
         blosc.set_nthreads(n_threads)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         batch = np.empty(batch_size, object)
 

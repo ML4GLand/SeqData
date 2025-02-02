@@ -60,7 +60,7 @@ class VCF(RegionReader):
     ) -> None:
         """Warning: This reader is experimental and may change in the future.
         For a more comprehensive VCF reader, see https://github.com/mcvickerlab/GenVarLoader.
-        
+
         Reader for variant call format (VCF) data.
 
         Parameters
@@ -85,7 +85,7 @@ class VCF(RegionReader):
             Name of the sample dimension.
         haplotype_dim : str, optional
             Name of the haplotype dimension.
-            
+
         Returns
         -------
         None
@@ -305,7 +305,7 @@ class VCF(RegionReader):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
 
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         _vcf = cyvcf2.VCF(
             self.vcf, lazy=True, samples=self.samples, threads=self.n_threads
@@ -380,7 +380,7 @@ class VCF(RegionReader):
         )
         arr.attrs["_ARRAY_DIMENSIONS"] = [self.sample_dim]
 
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         _vcf = cyvcf2.VCF(
             self.vcf, lazy=True, samples=self.samples, threads=self.n_threads
@@ -414,7 +414,7 @@ class VCF(RegionReader):
         _vcf.close()
 
     def _sequence_generator(self, bed: pl.DataFrame, splice=False):
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         _vcf = cyvcf2.VCF(
             self.vcf, lazy=True, samples=self.samples, threads=self.n_threads
