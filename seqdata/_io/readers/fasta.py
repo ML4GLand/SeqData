@@ -240,7 +240,7 @@ class GenomeFASTA(RegionReader):
         else:
             n_seqs = len(bed)
         batch_size = min(n_seqs, self.batch_size)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         root = zarr.open_group(out)
 
@@ -287,7 +287,7 @@ class GenomeFASTA(RegionReader):
 
         n_seqs = len(bed)
         batch_size = min(n_seqs, self.batch_size)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         root = zarr.open_group(out)
 

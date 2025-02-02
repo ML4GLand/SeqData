@@ -262,7 +262,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         splice: bool,
     ):
         blosc.set_nthreads(n_threads)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         batch = np.zeros((batch_size, fixed_length), self.dtype)
 
@@ -295,7 +295,7 @@ class BAM(RegionReader, Generic[DTYPE]):
         splice: bool,
     ):
         blosc.set_nthreads(n_threads)
-        to_rc = cast(NDArray[np.bool_], (bed["strand"] == "-").to_numpy())
+        to_rc = cast(NDArray[np.bool_], bed["strand"].eq_missing("-").to_numpy())
 
         batch = np.empty(batch_size, object)
 
